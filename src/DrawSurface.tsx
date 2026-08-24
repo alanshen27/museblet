@@ -41,6 +41,46 @@ interface Dust {
 const SETTLE_MS = 6000
 const GHOST_ALPHA = 0.35
 
+interface Pt {
+  x: number
+  y: number
+  pressure: number
+}
+
+// Catmull-Rom resampling: turns raw pointer points into a flowing curve
+function smoothPoints(pts: Pt[], subdiv = 6): Pt[] {
+  if (pts.length < 3) return pts
+  const out: Pt[] = []
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)]
+    const p1 = pts[i]
+    const p2 = pts[i + 1]
+    const p3 = pts[Math.min(pts.length - 1, i + 2)]
+    for (let j = 0; j < subdiv; j++) {
+      const t = j / subdiv
+      const t2 = t * t
+      const t3 = t2 * t
+      out.push({
+        x:
+          0.5 *
+          (2 * p1.x +
+            (-p0.x + p2.x) * t +
+            (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+            (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+        y:
+          0.5 *
+          (2 * p1.y +
+            (-p0.y + p2.y) * t +
+            (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+            (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
+        pressure: p1.pressure + (p2.pressure - p1.pressure) * t,
+      })
+    }
+  }
+  out.push(pts[pts.length - 1])
+  return out
+}
+
 export default function DrawSurface({
   strokes,
   onStrokesChange,
@@ -60,22 +100,27 @@ export default function DrawSurface({
   playheadRef.current = playheadX
 
   const spawnBurst = (x: number, y: number, color: string, big: boolean) => {
-    const n = big ? 18 : 6
+    const n = big ? 36 : 8
     for (let i = 0; i < n; i++) {
       const angle = Math.random() * Math.PI * 2
-      const speed = (big ? 2.5 : 1.2) * (0.4 + Math.random())
+      const speed = (big ? 3.6 : 1.2) * (0.3 + Math.random())
+      // fireworks: mostly pen-coloured sparks with a few white-hot ones
+      const spark = big && Math.random() < 0.3 ? '#f3efe4' : color
       particles.current.push({
         x,
         y,
         vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed - 0.3,
-        size: big ? 1.5 + Math.random() * 2.5 : 1 + Math.random() * 1.5,
+        vy: Math.sin(angle) * speed - 0.6,
+        size: big ? 1.2 + Math.random() * 2.8 : 1 + Math.random() * 1.5,
         life: 1,
-        decay: big ? 0.016 : 0.03,
-        color,
+        decay: big ? 0.008 + Math.random() * 0.01 : 0.03,
+        color: spark,
       })
     }
-    if (big) rings.current.push({ x, y, r: 4, life: 1, color })
+    if (big) {
+      rings.current.push({ x, y, r: 4, life: 1, color })
+      rings.current.push({ x, y, r: 1, life: 1.2, color: '#f3efe4' })
+    }
   }
 
   const spawnTrail = (x: number, y: number, color: string) => {
@@ -116,22 +161,6 @@ export default function DrawSurface({
     vignette.addColorStop(1, 'rgba(0,0,0,0.55)')
     g.fillStyle = vignette
     g.fillRect(0, 0, w, h)
-
-    // barely-there grid
-    g.strokeStyle = 'rgba(255,255,255,0.018)'
-    g.lineWidth = 1
-    for (let i = 1; i < 8; i++) {
-      g.beginPath()
-      g.moveTo(0, (i / 8) * h)
-      g.lineTo(w, (i / 8) * h)
-      g.stroke()
-    }
-    for (let i = 1; i < 16; i++) {
-      g.beginPath()
-      g.moveTo((i / 16) * w, 0)
-      g.lineTo((i / 16) * w, h)
-      g.stroke()
-    }
 
     // ambient glittering dust
     if (dust.current.length === 0 && w > 0) {
@@ -188,13 +217,17 @@ export default function DrawSurface({
       g.fillRect(cx - reach, cy - reach, reach * 2, reach * 2)
       g.globalAlpha = 1
 
-      for (let i = 1; i < s.points.length; i++) {
-        const a = s.points[i - 1]
-        const b = s.points[i]
+      const pts = smoothPoints(s.points)
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1]
+        const b = pts[i]
         // taper toward the ends for a brush feel
-        const t = i / s.points.length
+        const t = i / pts.length
         const taper = Math.sin(Math.PI * Math.min(1, t * 1.05))
-        const width = (1.5 + b.pressure * 9) * pen.lineWidth * (0.35 + taper * 0.65)
+        // organic swell: width breathes along the curve like a brush lifting
+        const swell = 0.75 + 0.25 * Math.sin(t * Math.PI * 3 + s.bornAt)
+        const width =
+          (1.5 + b.pressure * 9) * pen.lineWidth * (0.2 + taper * 0.8) * swell
         // near the playhead, the stroke gently brightens
         const nearBeam =
           px !== null ? Math.max(0, 1 - Math.abs(b.x - px) * 18) : 0
@@ -346,13 +379,32 @@ export default function DrawSurface({
     return () => observer.disconnect()
   }, [])
 
+  const lastMove = useRef<{ x: number; y: number; t: number } | null>(null)
+  const penWeight = useRef(0.5)
+
   const toPoint = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
-    return {
-      x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
-      y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height)),
-      pressure: e.pressure > 0 ? e.pressure : 0.5,
+    const x = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+    const y = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height))
+    // real-pen feel: without true pressure, derive weight from speed —
+    // slow deliberate movement lays down ink, fast flicks thin out
+    let pressure: number
+    if (e.pressure > 0 && e.pressure !== 0.5) {
+      pressure = e.pressure
+    } else {
+      const now = performance.now()
+      const prev = lastMove.current
+      if (prev) {
+        const dist = Math.hypot(x - prev.x, y - prev.y)
+        const dt = Math.max(1, now - prev.t)
+        const speed = (dist * 1000) / dt // normalized units per second
+        const target = Math.min(1, Math.max(0.12, 1 - speed * 1.6))
+        penWeight.current += (target - penWeight.current) * 0.25
+      }
+      lastMove.current = { x, y, t: now }
+      pressure = penWeight.current
     }
+    return { x, y, pressure }
   }
 
   return (
@@ -362,6 +414,8 @@ export default function DrawSurface({
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId)
         drawing.current = true
+        lastMove.current = null
+        penWeight.current = 0.5
         currentStroke.current = {
           points: [toPoint(e)],
           pen: penId,

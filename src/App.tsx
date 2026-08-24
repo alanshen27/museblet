@@ -95,53 +95,6 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="toolbar">
-        <h1>nocturne</h1>
-        <button
-          className={`transport ${playing ? 'active' : ''}`}
-          onClick={playing ? stop : play}
-        >
-          {playing ? '■ Stop' : '▶ Play'}
-        </button>
-        <button onClick={() => setStrokes([])}>Clear</button>
-        <label>
-          Tempo
-          <input
-            type="range"
-            min={40}
-            max={240}
-            value={tempo}
-            onChange={(e) => setTempo(Number(e.target.value))}
-          />
-          <span className="tempo-value">{tempo}</span>
-        </label>
-        <label>
-          Scale
-          <select value={scale} onChange={(e) => setScale(e.target.value)}>
-            {Object.keys(SCALES).map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className={`badge ${inMax ? 'max' : 'web'}`}>
-          {inMax ? 'Max DSP' : 'Web Audio'}
-        </span>
-      </header>
-      <div className="pen-rack">
-        {PENS.map((p) => (
-          <button
-            key={p.id}
-            className={`pen ${p.id === penId ? 'selected' : ''}`}
-            style={{ '--pen-color': p.color } as React.CSSProperties}
-            onClick={() => setPenId(p.id)}
-          >
-            <span className="pen-dot" />
-            {p.name}
-          </button>
-        ))}
-      </div>
       <main>
         <DrawSurface
           strokes={strokes}
@@ -150,10 +103,53 @@ export default function App() {
           penId={penId}
         />
       </main>
-      <footer>
-        Draw on the surface — x is time, y is pitch, pressure is velocity. Each
-        pen has its own sound.
-      </footer>
+      <nav className="dock">
+        {PENS.map((p) => (
+          <button
+            key={p.id}
+            className={`pen-dot-btn ${p.id === penId ? 'selected' : ''}`}
+            style={{ '--pen-color': p.color } as React.CSSProperties}
+            onClick={() => setPenId(p.id)}
+            aria-label={p.name}
+          />
+        ))}
+        <span className="dock-sep" />
+        <button
+          className={`glyph ${playing ? 'active' : ''}`}
+          onClick={playing ? stop : play}
+          aria-label={playing ? 'stop' : 'play'}
+        >
+          {playing ? '■' : '▶'}
+        </button>
+        <button
+          className="glyph"
+          onClick={() => setStrokes([])}
+          aria-label="clear"
+        >
+          ✕
+        </button>
+        <input
+          className="tempo"
+          type="range"
+          min={40}
+          max={240}
+          value={tempo}
+          onChange={(e) => setTempo(Number(e.target.value))}
+          aria-label="tempo"
+        />
+        <select
+          className="scale"
+          value={scale}
+          onChange={(e) => setScale(e.target.value)}
+          aria-label="scale"
+        >
+          {Object.keys(SCALES).map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+      </nav>
     </div>
   )
 }
