@@ -88,6 +88,21 @@ interface Dust {
   size: number
 }
 
+// a dot of the interactive field: anchored to a home position, pushed
+// away by nearby cursors/strokes and drifting on a noise map when idle
+interface FieldDot {
+  hx: number // home position (0..1 of canvas)
+  hy: number
+  ox: number // displacement from home, in px
+  oy: number
+  vx: number
+  vy: number
+  phase: number
+}
+
+const DOT_SPACING = 56 // px between field dots
+const DOT_PUSH_R = 150 // px radius within which a cursor disturbs dots
+
 // strokes settle, linger as ghosts, then dissolve to make way for new marks
 const SETTLE_MS = 3000
 const GHOST_ALPHA = 0.35
@@ -285,6 +300,9 @@ export default function DrawSurface({
   const rings = useRef<Ring[]>([])
   const blobs = useRef<Blob_[]>([])
   const dust = useRef<Dust[]>([])
+  const fieldDots = useRef<FieldDot[]>([])
+  const fieldSize = useRef({ w: 0, h: 0 })
+  const hover = useRef<{ x: number; y: number } | null>(null)
   const strokesRef = useRef(strokes)
   strokesRef.current = strokes
   const onStrokesChangeRef = useRef(onStrokesChange)
@@ -424,31 +442,73 @@ export default function DrawSurface({
       g.fillRect(0, 0, w, h)
       g.restore()
     }
-    // ocean: soft wave-lines of light flowing through the whole room,
-    // top to bottom, each undulating and drifting at its own pace
-    for (let i = 0; i < 8; i++) {
-      const baseY = h * ((i + 0.5) / 8 + 0.03 * Math.sin(t0 * 0.07 + i * 2.3))
-      const amp = h * (0.03 + 0.025 * Math.sin(i * 1.3 + t0 * 0.05))
-      const speed = 0.08 + (i % 3) * 0.045
-      const grad = g.createLinearGradient(0, 0, w, 0)
-      const col = i % 2 === 0 ? '#5a6f8a' : '#4a5e78'
-      grad.addColorStop(0, `${col}00`)
-      grad.addColorStop(0.5, col)
-      grad.addColorStop(1, `${col}00`)
-      g.globalAlpha = 0.05 + 0.02 * Math.sin(t0 * 0.19 + i)
-      g.strokeStyle = grad
-      g.lineWidth = h * 0.02
-      g.lineCap = 'round'
-      g.beginPath()
-      for (let x = 0; x <= w; x += 16) {
-        const y =
-          baseY +
-          amp * Math.sin((x / w) * Math.PI * 2.5 + t0 * speed * Math.PI * 2 + i * 1.7) +
-          amp * 0.5 * Math.sin((x / w) * Math.PI * 6 - t0 * speed * 3 + i)
-        if (x === 0) g.moveTo(x, y)
-        else g.lineTo(x, y)
+    // interactive dot field: a grid of faint dots that scatter away from
+    // your cursor/fingertips as you move, and drift on a slowly wandering
+    // noise map when left alone
+    if (
+      fieldSize.current.w !== w ||
+      fieldSize.current.h !== h ||
+      fieldDots.current.length === 0
+    ) {
+      fieldSize.current = { w, h }
+      fieldDots.current = []
+      for (let gy = DOT_SPACING / 2; gy < h; gy += DOT_SPACING) {
+        for (let gx = DOT_SPACING / 2; gx < w; gx += DOT_SPACING) {
+          fieldDots.current.push({
+            hx: gx / w,
+            hy: gy / h,
+            ox: 0,
+            oy: 0,
+            vx: 0,
+            vy: 0,
+            phase: Math.random() * Math.PI * 2,
+          })
+        }
       }
-      g.stroke()
+    }
+    // things that disturb the field: hover pointer, hand cursors,
+    // and the live tip of every active stroke
+    const pokes: { x: number; y: number }[] = []
+    if (hover.current) pokes.push({ x: hover.current.x * w, y: hover.current.y * h })
+    for (const c of cursors.current) pokes.push({ x: c.x * w, y: c.y * h })
+    for (const s of activeStrokes.current.values()) {
+      const p = s.points[s.points.length - 1]
+      if (p) pokes.push({ x: p.x * w, y: p.y * h })
+    }
+    for (const d of fieldDots.current) {
+      const hx = d.hx * w
+      const hy = d.hy * h
+      let disturbed = 0
+      for (const p of pokes) {
+        const dx = hx + d.ox - p.x
+        const dy = hy + d.oy - p.y
+        const dist = Math.hypot(dx, dy)
+        if (dist < DOT_PUSH_R && dist > 0.001) {
+          const f = (1 - dist / DOT_PUSH_R) ** 2 * 2.2
+          d.vx += (dx / dist) * f
+          d.vy += (dy / dist) * f
+          disturbed = Math.max(disturbed, 1 - dist / DOT_PUSH_R)
+        }
+      }
+      // idle: wander on a smooth noise map that itself drifts over time
+      const nx =
+        Math.sin(d.hx * 5.3 + t0 * 0.21 + d.phase) +
+        0.6 * Math.sin(d.hy * 8.1 - t0 * 0.13)
+      const ny =
+        Math.cos(d.hy * 4.7 - t0 * 0.17 + d.phase) +
+        0.6 * Math.cos(d.hx * 7.3 + t0 * 0.11)
+      d.vx += (nx * 9 - d.ox) * 0.004
+      d.vy += (ny * 9 - d.oy) * 0.004
+      d.vx *= 0.9
+      d.vy *= 0.9
+      d.ox += d.vx
+      d.oy += d.vy
+      const excite = Math.min(1, Math.hypot(d.vx, d.vy) / 3 + disturbed)
+      g.globalAlpha = 0.05 + excite * 0.3
+      g.fillStyle = excite > 0.25 ? '#8fa8c8' : '#5a6f8a'
+      g.beginPath()
+      g.arc(hx + d.ox, hy + d.oy, 1.1 + excite * 1.6, 0, Math.PI * 2)
+      g.fill()
     }
     g.globalCompositeOperation = 'source-over'
     g.globalAlpha = 1
@@ -1115,8 +1175,16 @@ export default function DrawSurface({
         strokeStart(e.pointerId, penId, toPoint(e))
       }}
       onPointerMove={(e) => {
+        const rect = e.currentTarget.getBoundingClientRect()
+        hover.current = {
+          x: (e.clientX - rect.left) / rect.width,
+          y: (e.clientY - rect.top) / rect.height,
+        }
         if (!activeStrokes.current.has(e.pointerId)) return
         strokeMove(e.pointerId, penId, toPoint(e))
+      }}
+      onPointerLeave={() => {
+        hover.current = null
       }}
       onPointerUp={(e) => strokeEnd(e.pointerId)}
       onPointerCancel={(e) => strokeEnd(e.pointerId)}
