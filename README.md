@@ -1,4 +1,4 @@
-# museblet
+# nocturne
 
 Draw on a surface, hear it as music. A React app (built to static HTML) that runs standalone in the browser with Web Audio, or inside Max/MSP via `jweb` where the DSP is done by a `poly~` synth.
 
@@ -29,14 +29,14 @@ Uses a built-in Web Audio synth (per-pen timbres + reverb).
    ```sh
    npm run build
    ```
-2. Open `max/museblet.maxpat` in Max. The `jweb` object loads `dist/index.html`.
+2. Open `max/nocturne.maxpat` in Max. The `jweb` object loads `dist/index.html`.
 3. Turn on audio (`ezdac~`). Draw and press Play — the app detects it is inside Max and sends note events out of the jweb outlet instead of using Web Audio.
 
 ### Messages
 
 Out of jweb (to Max):
 
-- `note <pen> <midi> <velocity> <durationMs>` — routed per pen to a `poly~ museblet.voice` synth (waveform / octave / release per pen)
+- `note <pen> <midi> <velocity> <durationMs>` — routed per pen to a `poly~ nocturne.voice` synth (waveform / octave / release per pen)
 - `transport play|stop`
 - `ready` — sent when the page has loaded
 

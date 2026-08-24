@@ -16,7 +16,7 @@
 		"statusbarvisible": 2,
 		"toolbarvisible": 1,
 		"boxes": [
-			{ "box": { "id": "title", "maxclass": "comment", "numinlets": 1, "numoutlets": 0, "patching_rect": [ 30.0, 15.0, 400.0, 20.0 ], "text": "museblet — draw on the surface, hear it as sound. Build the web app first (npm run build)." } },
+			{ "box": { "id": "title", "maxclass": "comment", "numinlets": 1, "numoutlets": 0, "patching_rect": [ 30.0, 15.0, 400.0, 20.0 ], "text": "nocturne — draw on the surface, hear it as sound. Build the web app first (npm run build)." } },
 			{ "box": { "id": "jweb", "maxclass": "jweb", "numinlets": 1, "numoutlets": 2, "outlettype": [ "", "" ], "patching_rect": [ 30.0, 50.0, 640.0, 480.0 ], "url": "../dist/index.html" } },
 
 			{ "box": { "id": "playmsg", "maxclass": "message", "numinlets": 2, "numoutlets": 1, "outlettype": [ "" ], "patching_rect": [ 700.0, 50.0, 40.0, 22.0 ], "text": "play" } },
@@ -36,11 +36,11 @@
 			{ "box": { "id": "pre4", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [ "" ], "patching_rect": [ 420.0, 630.0, 110.0, 22.0 ], "text": "prepend midinote" } },
 			{ "box": { "id": "pre5", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [ "" ], "patching_rect": [ 550.0, 630.0, 110.0, 22.0 ], "text": "prepend midinote" } },
 
-			{ "box": { "id": "poly1", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [ "signal" ], "patching_rect": [ 30.0, 665.0, 190.0, 22.0 ], "text": "poly~ museblet.voice 8 saw 0 250" } },
-			{ "box": { "id": "poly2", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [ "signal" ], "patching_rect": [ 160.0, 695.0, 190.0, 22.0 ], "text": "poly~ museblet.voice 8 rect 0 120" } },
-			{ "box": { "id": "poly3", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [ "signal" ], "patching_rect": [ 290.0, 725.0, 200.0, 22.0 ], "text": "poly~ museblet.voice 8 cycle -12 900" } },
-			{ "box": { "id": "poly4", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [ "signal" ], "patching_rect": [ 420.0, 755.0, 190.0, 22.0 ], "text": "poly~ museblet.voice 8 tri -12 400" } },
-			{ "box": { "id": "poly5", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [ "signal" ], "patching_rect": [ 550.0, 785.0, 200.0, 22.0 ], "text": "poly~ museblet.voice 8 cycle 12 600" } },
+			{ "box": { "id": "poly1", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [ "signal" ], "patching_rect": [ 30.0, 665.0, 190.0, 22.0 ], "text": "poly~ nocturne.voice 8 saw 0 250" } },
+			{ "box": { "id": "poly2", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [ "signal" ], "patching_rect": [ 160.0, 695.0, 190.0, 22.0 ], "text": "poly~ nocturne.voice 8 rect 0 120" } },
+			{ "box": { "id": "poly3", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [ "signal" ], "patching_rect": [ 290.0, 725.0, 200.0, 22.0 ], "text": "poly~ nocturne.voice 8 cycle -12 900" } },
+			{ "box": { "id": "poly4", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [ "signal" ], "patching_rect": [ 420.0, 755.0, 190.0, 22.0 ], "text": "poly~ nocturne.voice 8 tri -12 400" } },
+			{ "box": { "id": "poly5", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "outlettype": [ "signal" ], "patching_rect": [ 550.0, 785.0, 200.0, 22.0 ], "text": "poly~ nocturne.voice 8 cycle 12 600" } },
 
 			{ "box": { "id": "mix", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "outlettype": [ "signal" ], "patching_rect": [ 700.0, 665.0, 80.0, 22.0 ], "text": "*~ 0.8" } },
 			{ "box": { "id": "limiter", "maxclass": "newobj", "numinlets": 1, "numoutlets": 2, "outlettype": [ "signal", "signal" ], "patching_rect": [ 700.0, 700.0, 90.0, 22.0 ], "text": "limi~ 2" } },

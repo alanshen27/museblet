@@ -96,7 +96,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="toolbar">
-        <h1>museblet</h1>
+        <h1>nocturne</h1>
         <button
           className={`transport ${playing ? 'active' : ''}`}
           onClick={playing ? stop : play}
