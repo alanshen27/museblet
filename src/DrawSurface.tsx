@@ -123,6 +123,50 @@ function softMote(
   g.fill()
 }
 
+// rotate a hex colour around the wheel keeping its muted saturation and
+// lightness, so every ball/stroke can wear its own distinct colour
+function shiftHue(hex: string, deg: number): string {
+  const r0 = parseInt(hex.slice(1, 3), 16) / 255
+  const g0 = parseInt(hex.slice(3, 5), 16) / 255
+  const b0 = parseInt(hex.slice(5, 7), 16) / 255
+  const max = Math.max(r0, g0, b0)
+  const min = Math.min(r0, g0, b0)
+  const l = (max + min) / 2
+  const d = max - min
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1))
+  let hue = 0
+  if (d !== 0) {
+    if (max === r0) hue = 60 * (((g0 - b0) / d + 6) % 6)
+    else if (max === g0) hue = 60 * ((b0 - r0) / d + 2)
+    else hue = 60 * ((r0 - g0) / d + 4)
+  }
+  hue = (hue + deg + 360) % 360
+  const c = (1 - Math.abs(2 * l - 1)) * s
+  const xx = c * (1 - Math.abs(((hue / 60) % 2) - 1))
+  const m = l - c / 2
+  let rr = 0
+  let gg = 0
+  let bb = 0
+  if (hue < 60) [rr, gg, bb] = [c, xx, 0]
+  else if (hue < 120) [rr, gg, bb] = [xx, c, 0]
+  else if (hue < 180) [rr, gg, bb] = [0, c, xx]
+  else if (hue < 240) [rr, gg, bb] = [0, xx, c]
+  else if (hue < 300) [rr, gg, bb] = [xx, 0, c]
+  else [rr, gg, bb] = [c, 0, xx]
+  const to = (v: number) =>
+    Math.round((v + m) * 255)
+      .toString(16)
+      .padStart(2, '0')
+  return `#${to(rr)}${to(gg)}${to(bb)}`
+}
+
+function glowOf(hex: string, alpha = 0.45): string {
+  const r0 = parseInt(hex.slice(1, 3), 16)
+  const g0 = parseInt(hex.slice(3, 5), 16)
+  const b0 = parseInt(hex.slice(5, 7), 16)
+  return `rgba(${r0},${g0},${b0},${alpha})`
+}
+
 // moving-average pass: irons out hand jitter before curve fitting
 function relaxPoints(pts: Pt[], passes = 4): Pt[] {
   let cur = pts
@@ -450,6 +494,10 @@ export default function DrawSurface({
     for (const s of strokesRef.current) {
       if (s.points.length < 2) continue
       const pen = getPen(s.pen)
+      // each stroke wears its own hue spun off the pen's colour family
+      const cA = s.hue ? shiftHue(pen.color, s.hue) : pen.color
+      const cB = s.hue ? shiftHue(pen.colorB, s.hue) : pen.colorB
+      const cGlow = s.hue ? glowOf(cA, 0.45) : pen.glow
       const age = now - s.bornAt
       const settle = Math.min(1, age / SETTLE_MS)
       let baseAlpha = 1 - settle * (1 - GHOST_ALPHA)
@@ -471,7 +519,7 @@ export default function DrawSurface({
         Math.hypot((last.x - first.x) * w, (last.y - first.y) * h),
       )
       const pool = g.createRadialGradient(cx, cy, 0, cx, cy, reach)
-      pool.addColorStop(0, pen.glow)
+      pool.addColorStop(0, cGlow)
       pool.addColorStop(1, 'rgba(0,0,0,0)')
       g.globalAlpha = 0.1 * baseAlpha
       g.fillStyle = pool
@@ -492,7 +540,7 @@ export default function DrawSurface({
           const r3 = Math.sin(i * 3.7 + s.bornAt) * 9631.77
           const size = 1.5 + (r3 - Math.floor(r3)) * 4.5
           const dotColor =
-            (r2 - Math.floor(r2)) < 0.25 ? '#efe9dd' : pen.color
+            (r2 - Math.floor(r2)) < 0.25 ? '#efe9dd' : cA
           softMote(
             g,
             p.x * w + ox,
@@ -510,7 +558,7 @@ export default function DrawSurface({
       // rain strokes: a thin silver seam in the sky that keeps raining
       if (pen.tool === 'rain' && age < LINGER_MS && Math.random() < 0.5) {
         const p = s.points[Math.floor(Math.random() * s.points.length)]
-        spawnDrop(p.x * w, p.y * h, pen.color)
+        spawnDrop(p.x * w, p.y * h, cA)
       }
 
       // variable-width ribbon polygon (perfect-freehand style): offset the
@@ -552,8 +600,8 @@ export default function DrawSurface({
       const x1 = pts[n - 1].x * w
       const y1 = pts[n - 1].y * h
       const grad = g.createLinearGradient(x0, y0, x1, y1)
-      grad.addColorStop(0, pen.color)
-      grad.addColorStop(1, pen.colorB)
+      grad.addColorStop(0, cA)
+      grad.addColorStop(1, cB)
 
       const nearBeam =
         px !== null
@@ -565,7 +613,7 @@ export default function DrawSurface({
       const alpha = Math.min(1, baseAlpha + nearBeam * 0.5) * flicker
 
       // soft glow beneath the body
-      g.shadowColor = pen.glow
+      g.shadowColor = cGlow
       g.shadowBlur = pen.style === 'soft' ? 30 : 18
       g.globalAlpha = alpha * 0.45
       g.fillStyle = grad
@@ -580,7 +628,7 @@ export default function DrawSurface({
 
       if (pen.style === 'sparkle') {
         g.shadowBlur = 0
-        g.fillStyle = pen.color
+        g.fillStyle = cA
         for (let i = 0; i < s.points.length; i += 5) {
           const p = s.points[i]
           const tw = 0.5 + 0.5 * Math.sin(now / 110 + i)
@@ -599,13 +647,14 @@ export default function DrawSurface({
       const prev = prevPlayheadRef.current
       for (const s of strokesRef.current) {
         const pen = getPen(s.pen)
+        const burstColor = s.hue ? shiftHue(pen.color, s.hue) : pen.color
         for (const p of s.points) {
           const crossed =
             prev !== null && prev <= px
               ? p.x > prev && p.x <= px
               : Math.abs(p.x - px) < 0.004
           if (crossed && Math.random() < 0.35) {
-            spawnBurst(p.x * w, p.y * h, pen.color, Math.random() < 0.3)
+            spawnBurst(p.x * w, p.y * h, burstColor, Math.random() < 0.3)
           }
         }
       }
@@ -892,11 +941,13 @@ export default function DrawSurface({
       onDrawPointRef.current?.(id, pid, p0)
       // firework pen dabs: drop a blob, no stroke
       if (pen.tool === 'firework' && canvas) {
+        // every ball gets its own distinct colour
+        const tint = shiftHue(pen.color, Math.random() * 360)
         blobs.current.push({
           x: p0.x * canvas.width,
           y: p0.y * canvas.height,
-          color: pen.color,
-          glow: pen.glow,
+          color: tint,
+          glow: glowOf(tint, 0.5),
           born: performance.now(),
           size: 14 + p0.pressure * 20,
         })
@@ -906,6 +957,7 @@ export default function DrawSurface({
         points: [p0],
         pen: pid,
         bornAt: performance.now(),
+        hue: Math.random() * 360,
       }
       activeStrokes.current.set(id, stroke)
       onStrokesChangeRef.current([...strokesRef.current, stroke])
@@ -923,10 +975,11 @@ export default function DrawSurface({
     const canvas = canvasRef.current
     const pen = getPen(pid)
     if (canvas) {
+      const tint = stroke.hue ? shiftHue(pen.color, stroke.hue) : pen.color
       if (pen.tool === 'chalk') {
-        spawnChalk(p.x * canvas.width, p.y * canvas.height, pen.color, 4)
+        spawnChalk(p.x * canvas.width, p.y * canvas.height, tint, 4)
       } else if (pen.tool !== 'rain') {
-        spawnTrail(p.x * canvas.width, p.y * canvas.height, pen.color)
+        spawnTrail(p.x * canvas.width, p.y * canvas.height, tint)
       }
     }
     onStrokesChangeRef.current([...strokesRef.current])
