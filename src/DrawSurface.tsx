@@ -160,6 +160,21 @@ function shiftHue(hex: string, deg: number): string {
   return `#${to(rr)}${to(gg)}${to(bb)}`
 }
 
+// hue (degrees) of a hex colour — picks which scene lives inside a stroke
+function hueOfHex(hex: string): number {
+  const r0 = parseInt(hex.slice(1, 3), 16) / 255
+  const g0 = parseInt(hex.slice(3, 5), 16) / 255
+  const b0 = parseInt(hex.slice(5, 7), 16) / 255
+  const max = Math.max(r0, g0, b0)
+  const d = max - Math.min(r0, g0, b0)
+  if (d === 0) return 0
+  let hue = 0
+  if (max === r0) hue = 60 * (((g0 - b0) / d + 6) % 6)
+  else if (max === g0) hue = 60 * ((b0 - r0) / d + 2)
+  else hue = 60 * ((r0 - g0) / d + 4)
+  return hue
+}
+
 function glowOf(hex: string, alpha = 0.45): string {
   const r0 = parseInt(hex.slice(1, 3), 16)
   const g0 = parseInt(hex.slice(3, 5), 16)
@@ -625,6 +640,82 @@ export default function DrawSurface({
       g.globalAlpha = alpha * 0.9
       trace()
       g.fill()
+
+      // a little scene lives inside each stroke, chosen by its colour:
+      // stars in blue marks, embers in warm ones, fireflies in green,
+      // drifting petals in pink/violet — clipped to the ribbon body
+      {
+        const hueDeg = hueOfHex(cA)
+        g.save()
+        trace()
+        g.clip()
+        g.globalCompositeOperation = 'lighter'
+        g.shadowBlur = 0
+        for (let i = 3; i < n - 3; i += 9) {
+          const p = pts[i]
+          const r1 = Math.sin(i * 12.9898 + s.bornAt) * 43758.5453
+          const f1 = r1 - Math.floor(r1)
+          const r2 = Math.sin(i * 78.233 + s.bornAt) * 12543.123
+          const f2 = r2 - Math.floor(r2)
+          const mx = p.x * w + (f1 - 0.5) * 36
+          const my = p.y * h + (f2 - 0.5) * 36
+          const tw = 0.5 + 0.5 * Math.sin(now / 300 + i * 1.7 + f1 * 6)
+          if (hueDeg >= 175 && hueDeg < 290) {
+            // night sky: tiny four-point stars twinkle in blue strokes
+            const sz = 1.5 + f1 * 3
+            g.globalAlpha = alpha * tw * 0.9
+            g.strokeStyle = '#f5f2ff'
+            g.lineWidth = 1
+            g.beginPath()
+            g.moveTo(mx - sz, my)
+            g.lineTo(mx + sz, my)
+            g.moveTo(mx, my - sz)
+            g.lineTo(mx, my + sz)
+            g.stroke()
+            softMote(g, mx, my, sz * 1.6, '#cfe0ff', alpha * tw * 0.6)
+          } else if (hueDeg < 65 || hueDeg >= 330) {
+            // warm: embers rising slowly through the mark
+            const rise = (now / 28 + i * 13) % 60
+            softMote(
+              g,
+              mx,
+              my - rise * 0.5,
+              1.5 + f2 * 2.5,
+              '#ffb36b',
+              alpha * tw * 0.8,
+            )
+          } else if (hueDeg < 175) {
+            // green: fireflies wandering inside the stroke
+            const wx = Math.sin(now / 500 + i) * 10
+            const wy = Math.cos(now / 700 + i * 2) * 8
+            softMote(
+              g,
+              mx + wx,
+              my + wy,
+              2 + f1 * 2,
+              '#d8ffb0',
+              alpha * (0.25 + tw * 0.65),
+            )
+          } else {
+            // violet/pink: petals drifting gently downward
+            const fall = (now / 40 + i * 17) % 50
+            g.globalAlpha = alpha * 0.7 * tw
+            g.fillStyle = '#ffd9ec'
+            g.beginPath()
+            g.ellipse(
+              mx,
+              my + fall * 0.35,
+              3 + f1 * 2,
+              1.4 + f2,
+              now / 900 + i,
+              0,
+              Math.PI * 2,
+            )
+            g.fill()
+          }
+        }
+        g.restore()
+      }
 
       if (pen.style === 'sparkle') {
         g.shadowBlur = 0
