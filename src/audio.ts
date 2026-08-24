@@ -43,9 +43,9 @@ function getContext(): AudioContext {
     comp.connect(ctx.destination)
 
     reverb = ctx.createConvolver()
-    reverb.buffer = impulseResponse(ctx, 2.5, 3)
+    reverb.buffer = impulseResponse(ctx, 3.5, 4)
     const wet = ctx.createGain()
-    wet.gain.value = 0.35
+    wet.gain.value = 0.4
     reverb.connect(wet)
     wet.connect(master)
 
@@ -82,6 +82,7 @@ export function midiToFreq(midi: number): number {
 interface GlideVoice {
   osc: OscillatorNode
   osc2: OscillatorNode
+  lfo: OscillatorNode
   gain: GainNode
   filter: BiquadFilterNode
   penId: string
@@ -122,7 +123,18 @@ export function glideTo(
       osc.start(now)
       return osc
     }
-    v = { osc: mk(pen.detune), osc2: mk(-pen.detune), gain, filter, penId }
+    const osc = mk(pen.detune)
+    const osc2 = mk(-pen.detune)
+    // gentle vibrato: a voice that breathes reads as sung, not synthetic
+    const lfo = ac.createOscillator()
+    lfo.frequency.value = 4.6
+    const lfoGain = ac.createGain()
+    lfoGain.gain.value = 5.5 // cents
+    lfo.connect(lfoGain)
+    lfoGain.connect(osc.detune)
+    lfoGain.connect(osc2.detune)
+    lfo.start(now)
+    v = { osc, osc2, lfo, gain, filter, penId }
     glides.set(pointerId, v)
   }
   const freq = midiToFreq(midi + pen.octaveShift * 12)
@@ -140,6 +152,7 @@ export function glideStop(pointerId: number) {
   v.gain.gain.setTargetAtTime(0, now, 0.5)
   v.osc.stop(now + 3)
   v.osc2.stop(now + 3)
+  v.lfo.stop(now + 3)
 }
 
 // firework detonation: a sub thump + filtered noise whoosh + bell shimmer
