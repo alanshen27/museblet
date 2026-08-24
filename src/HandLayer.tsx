@@ -38,6 +38,12 @@ const FIST_OFF = 1.35
 // very sensitive, so a small twist spins the selection
 const STEP_RAD = Math.PI / 14
 
+// gestures must hold steady for this many consecutive frames before they
+// trigger — overlapping fingers momentarily look like pinches/fists and
+// would otherwise fire strokes or switch tools at random
+const PINCH_FRAMES = 3
+const FIST_FRAMES = 6
+
 // camera footage is shaky: exponentially smooth each fingertip before it
 // ever reaches the stroke, on top of the surface's own relax/curve passes
 const SMOOTH = 0.35
@@ -53,6 +59,8 @@ interface HandState {
   fist: boolean
   menuAngle: number // hand roll angle when the fist closed
   menuSel: number
+  pinchHold: number // consecutive frames the pinch condition has held
+  fistHold: number // consecutive frames the fist condition has held
 }
 
 interface Props {
@@ -115,6 +123,8 @@ export default function HandLayer({ surface }: Props) {
           fist: false,
           menuAngle: 0,
           menuSel: 0,
+          pinchHold: 0,
+          fistHold: 0,
         }
         // webcam glitch guard: when tracking clips out the landmark can
         // teleport across the frame for a frame or two — ignore impossible
@@ -149,18 +159,19 @@ export default function HandLayer({ surface }: Props) {
         const roll = Math.atan2(mcp.y - wrist.y, -(mcp.x - wrist.x))
 
         const id = 1000 + hand
-        if (!state.fist && spread < FIST_ON) {
-          // fist bunches: summon the wheel, drop any active stroke
+        // debounced fist: bunched fingers mid-pinch can look fist-like for
+        // a frame or two — only a held fist summons or dismisses the wheel
+        const fistCond = state.fist ? spread > FIST_OFF : spread < FIST_ON
+        state.fistHold = fistCond ? state.fistHold + 1 : 0
+        if (!state.fist && !state.pinched && state.fistHold >= FIST_FRAMES) {
           state.fist = true
+          state.fistHold = 0
           state.menuAngle = roll
           state.menuSel = state.pen
-          if (state.pinched) {
-            state.pinched = false
-            surface.current?.strokeEnd(id)
-          }
-        } else if (state.fist && spread > FIST_OFF) {
+        } else if (state.fist && state.fistHold >= FIST_FRAMES) {
           // hand opens: commit the highlighted pen
           state.fist = false
+          state.fistHold = 0
           state.pen = state.menuSel
         }
 
@@ -189,11 +200,19 @@ export default function HandLayer({ surface }: Props) {
         const p: DrawPoint = { x, y, pressure, speed: state.speed }
         const pen = PENS[state.pen].id
 
-        if (!state.pinched && pinchDist < PINCH_ON) {
+        // debounced pinch: must hold for a few frames so a finger briefly
+        // crossing the thumb doesn't start (or cut) a stroke
+        const pinchCond = state.pinched
+          ? pinchDist > PINCH_OFF
+          : pinchDist < PINCH_ON
+        state.pinchHold = pinchCond ? state.pinchHold + 1 : 0
+        if (!state.pinched && state.pinchHold >= PINCH_FRAMES) {
           state.pinched = true
+          state.pinchHold = 0
           surface.current?.strokeStart(id, pen, p)
-        } else if (state.pinched && pinchDist > PINCH_OFF) {
+        } else if (state.pinched && state.pinchHold >= PINCH_FRAMES) {
           state.pinched = false
+          state.pinchHold = 0
           surface.current?.strokeEnd(id)
         } else if (state.pinched) {
           surface.current?.strokeMove(id, pen, p)
