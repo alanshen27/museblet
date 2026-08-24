@@ -365,25 +365,31 @@ export default function DrawSurface({
       g.fillRect(0, 0, w, h)
       g.restore()
     }
-    // ocean: slow sine swells rolling across the lower third
-    for (let i = 0; i < 3; i++) {
-      const baseY = h * (0.78 + i * 0.07)
-      const amp = h * 0.02 * (1 + i * 0.4)
-      const speed = 0.12 + i * 0.05
-      g.globalAlpha = 0.05 - i * 0.01
-      g.fillStyle = i === 0 ? '#5a6f8a' : '#3d5a70'
+    // ocean: soft wave-lines of light flowing through the whole room,
+    // top to bottom, each undulating and drifting at its own pace
+    for (let i = 0; i < 8; i++) {
+      const baseY = h * ((i + 0.5) / 8 + 0.03 * Math.sin(t0 * 0.07 + i * 2.3))
+      const amp = h * (0.03 + 0.025 * Math.sin(i * 1.3 + t0 * 0.05))
+      const speed = 0.08 + (i % 3) * 0.045
+      const grad = g.createLinearGradient(0, 0, w, 0)
+      const col = i % 2 === 0 ? '#5a6f8a' : '#4a5e78'
+      grad.addColorStop(0, `${col}00`)
+      grad.addColorStop(0.5, col)
+      grad.addColorStop(1, `${col}00`)
+      g.globalAlpha = 0.05 + 0.02 * Math.sin(t0 * 0.19 + i)
+      g.strokeStyle = grad
+      g.lineWidth = h * 0.02
+      g.lineCap = 'round'
       g.beginPath()
-      g.moveTo(0, h)
       for (let x = 0; x <= w; x += 16) {
         const y =
           baseY +
-          amp * Math.sin((x / w) * Math.PI * 3 + t0 * speed * Math.PI * 2 + i * 1.7) +
-          amp * 0.5 * Math.sin((x / w) * Math.PI * 7 - t0 * speed * 3)
-        g.lineTo(x, y)
+          amp * Math.sin((x / w) * Math.PI * 2.5 + t0 * speed * Math.PI * 2 + i * 1.7) +
+          amp * 0.5 * Math.sin((x / w) * Math.PI * 6 - t0 * speed * 3 + i)
+        if (x === 0) g.moveTo(x, y)
+        else g.lineTo(x, y)
       }
-      g.lineTo(w, h)
-      g.closePath()
-      g.fill()
+      g.stroke()
     }
     g.globalCompositeOperation = 'source-over'
     g.globalAlpha = 1
