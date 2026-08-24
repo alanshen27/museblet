@@ -6,6 +6,7 @@ import { getPen } from './pens'
 let ctx: AudioContext | null = null
 let master: GainNode | null = null
 let reverb: ConvolverNode | null = null
+let delaySend: GainNode | null = null
 
 function impulseResponse(ac: AudioContext, seconds: number, decay: number) {
   const rate = ac.sampleRate
@@ -33,6 +34,25 @@ function getContext(): AudioContext {
     wet.gain.value = 0.35
     reverb.connect(wet)
     wet.connect(ctx.destination)
+
+    // dotted-feel echo for space and movement
+    const delay = ctx.createDelay(1)
+    delay.delayTime.value = 0.31
+    const feedback = ctx.createGain()
+    feedback.gain.value = 0.32
+    const dampen = ctx.createBiquadFilter()
+    dampen.type = 'lowpass'
+    dampen.frequency.value = 2200
+    const delayWet = ctx.createGain()
+    delayWet.gain.value = 0.22
+    delaySend = ctx.createGain()
+    delaySend.gain.value = 1
+    delaySend.connect(delay)
+    delay.connect(dampen)
+    dampen.connect(feedback)
+    feedback.connect(delay)
+    dampen.connect(delayWet)
+    delayWet.connect(ctx.destination)
   }
   if (ctx.state === 'suspended') void ctx.resume()
   return ctx
@@ -52,7 +72,9 @@ export function playNote(
   const ac = getContext()
   const now = ac.currentTime
   const dur = Math.max(0.05, durationMs / 1000)
-  const freq = midiToFreq(midi + pen.octaveShift * 12)
+  // slight humanization keeps repeated notes from sounding mechanical
+  const freq =
+    midiToFreq(midi + pen.octaveShift * 12) * (1 + (Math.random() - 0.5) * 0.004)
   const vel = velocity / 127
 
   const gain = ac.createGain()
@@ -77,6 +99,7 @@ export function playNote(
   filter.connect(gain)
   gain.connect(master!)
   gain.connect(reverb!)
+  gain.connect(delaySend!)
 
   const stopAt = now + dur + pen.release + 0.1
   for (const cents of [pen.detune, -pen.detune]) {

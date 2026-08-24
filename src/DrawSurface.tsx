@@ -70,8 +70,13 @@ function relaxPoints(pts: Pt[], passes = 2): Pt[] {
   return cur
 }
 
+// smoothed-path cache so long strokes aren't recomputed every frame
+const smoothCache = new WeakMap<Pt[], { count: number; pts: Pt[] }>()
+
 // Catmull-Rom resampling: turns raw pointer points into a flowing curve
 function smoothPoints(raw: Pt[], subdiv = 8): Pt[] {
+  const cached = smoothCache.get(raw)
+  if (cached && cached.count === raw.length) return cached.pts
   const pts = relaxPoints(raw)
   if (pts.length < 3) return pts
   const out: Pt[] = []
@@ -102,6 +107,7 @@ function smoothPoints(raw: Pt[], subdiv = 8): Pt[] {
     }
   }
   out.push(pts[pts.length - 1])
+  smoothCache.set(raw, { count: raw.length, pts: out })
   return out
 }
 
