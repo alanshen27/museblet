@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { Stroke } from './music'
-import { getPen } from './pens'
+import { getPen, PENS } from './pens'
 
 export interface DrawPoint {
   x: number
@@ -15,6 +15,18 @@ export interface SurfaceCursor {
   y: number
   color: string
   active: boolean
+  /** 0..1 pinch closeness — how near this finger is to activating */
+  strength?: number
+  /** thumbs render as the anchor/activation point */
+  kind?: 'tip' | 'thumb'
+}
+
+/** a radial pen wheel summoned around a fist */
+export interface SurfaceMenu {
+  x: number
+  y: number
+  /** index into PENS currently highlighted */
+  selected: number
 }
 
 /** imperative surface API so non-pointer sources (hand tracking) can draw */
@@ -23,6 +35,7 @@ export interface DrawHandle {
   strokeMove: (id: number, penId: string, p: DrawPoint) => void
   strokeEnd: (id: number) => void
   setCursors: (cursors: SurfaceCursor[]) => void
+  setMenus: (menus: SurfaceMenu[]) => void
 }
 
 interface Props {
@@ -214,6 +227,8 @@ export default function DrawSurface({
   onDrawEndRef.current = onDrawEnd
   // projected cursor dots (tracked fingertips hovering over the surface)
   const cursors = useRef<SurfaceCursor[]>([])
+  // radial pen wheels summoned by a fist
+  const menus = useRef<SurfaceMenu[]>([])
   const playheadRef = useRef(playheadX)
   const prevPlayheadRef = useRef<number | null>(null)
   playheadRef.current = playheadX
@@ -651,18 +666,78 @@ export default function DrawSurface({
     g.globalAlpha = 1
     g.shadowBlur = 0
 
-    // projected fingertip cursors: tiny dots of light hovering on the surface
+    // projected fingertip cursors: orbs of light hovering on the surface.
+    // The thumb is the activation point; as a finger pinches toward it, a
+    // ring contracts onto the orb and lights up at the moment of contact.
     g.globalCompositeOperation = 'lighter'
     for (const c of cursors.current) {
-      const pulse = 0.75 + 0.25 * Math.sin(now / 220)
-      softMote(
-        g,
-        c.x * w,
-        c.y * h,
-        c.active ? 14 : 8 * pulse,
-        c.color,
-        c.active ? 0.9 : 0.45,
-      )
+      const cx = c.x * w
+      const cy = c.y * h
+      const pulse = 0.75 + 0.25 * Math.sin(now / 220 + cx)
+      if (c.kind === 'thumb') {
+        // anchor: a small steady pearl with a faint halo
+        softMote(g, cx, cy, 10, '#e8e3d8', 0.5, 0.25)
+        g.globalAlpha = 0.35
+        g.strokeStyle = '#e8e3d8'
+        g.lineWidth = 1
+        g.beginPath()
+        g.arc(cx, cy, 16, 0, Math.PI * 2)
+        g.stroke()
+        continue
+      }
+      const s = c.strength ?? 0
+      const r = c.active ? 26 : (14 + s * 8) * pulse
+      // aura + hot core
+      softMote(g, cx, cy, r * 2.2, c.color, (c.active ? 0.35 : 0.15) + s * 0.15, 0.15)
+      softMote(g, cx, cy, r, c.color, c.active ? 1 : 0.55 + s * 0.3)
+      // approach ring: contracts onto the orb as the pinch closes
+      if (!c.active) {
+        g.globalAlpha = 0.25 + s * 0.5
+        g.strokeStyle = c.color
+        g.lineWidth = 1.2 + s * 1.5
+        g.beginPath()
+        g.arc(cx, cy, r + 26 * (1 - s), 0, Math.PI * 2)
+        g.stroke()
+      } else {
+        // lit: a crisp bright ring hugging the orb
+        g.globalAlpha = 0.9
+        g.strokeStyle = '#fffaf0'
+        g.lineWidth = 1.6
+        g.beginPath()
+        g.arc(cx, cy, r + 4, 0, Math.PI * 2)
+        g.stroke()
+      }
+    }
+
+    // radial pen wheel: swatches orbiting a fist, rotate to highlight
+    for (const m of menus.current) {
+      const mx = m.x * w
+      const my = m.y * h
+      const R = Math.min(w, h) * 0.12
+      g.globalAlpha = 0.2
+      g.strokeStyle = '#e8e3d8'
+      g.lineWidth = 1
+      g.beginPath()
+      g.arc(mx, my, R, 0, Math.PI * 2)
+      g.stroke()
+      PENS.forEach((pen, i) => {
+        const a = -Math.PI / 2 + (i / PENS.length) * Math.PI * 2
+        const px = mx + Math.cos(a) * R
+        const py = my + Math.sin(a) * R
+        const sel = i === m.selected
+        const pulse = 0.85 + 0.15 * Math.sin(now / 180 + i)
+        softMote(g, px, py, sel ? 30 * pulse : 12, pen.color, sel ? 1 : 0.4)
+        if (sel) {
+          g.globalAlpha = 0.9
+          g.strokeStyle = '#fffaf0'
+          g.lineWidth = 1.6
+          g.beginPath()
+          g.arc(px, py, 20 * pulse, 0, Math.PI * 2)
+          g.stroke()
+        }
+      })
+      // centre: the currently highlighted colour glows in the fist
+      softMote(g, mx, my, 16, PENS[m.selected].color, 0.8)
     }
     g.globalCompositeOperation = 'source-over'
     g.globalAlpha = 1
@@ -792,6 +867,9 @@ export default function DrawSurface({
       strokeEnd,
       setCursors: (c) => {
         cursors.current = c
+      },
+      setMenus: (m) => {
+        menus.current = m
       },
     }
     return () => {
