@@ -198,6 +198,16 @@ function glowOf(hex: string, alpha = 0.45): string {
   return `rgba(${r0},${g0},${b0},${alpha})`
 }
 
+// rolling height map (roughly -1..1): drives the 3D topographic waves and
+// gently warps drawn marks so they ride the same terrain
+function terrainH(x: number, y: number, t: number): number {
+  return (
+    0.5 * Math.sin(x * 4.1 + t * 0.32 + 1.2 * Math.sin(y * 3.3 - t * 0.21)) +
+    0.35 * Math.sin(y * 5.7 - t * 0.26 + Math.sin(x * 2.7 + t * 0.17)) +
+    0.15 * Math.sin((x + y) * 2.3 + t * 0.14)
+  )
+}
+
 // moving-average pass: irons out hand jitter before curve fitting
 function relaxPoints(pts: Pt[], passes = 4): Pt[] {
   let cur = pts
@@ -426,6 +436,13 @@ export default function DrawSurface({
     // ocean swells breathing along the bottom — barely-there light
     g.globalCompositeOperation = 'lighter'
     const t0 = now / 1000
+    // strokes ride the terrain: the same height map that shapes the
+    // topographic waves gently displaces every drawn mark
+    const warpPt = (p: Pt): Pt => ({
+      x: p.x + 0.004 * terrainH(p.x, p.y, t0),
+      y: p.y + 0.009 * terrainH(p.y + 0.37, p.x + 0.61, t0),
+      pressure: p.pressure,
+    })
     for (let i = 0; i < AURORA.length; i++) {
       const a = AURORA[i]
       const cx = (0.5 + 0.42 * Math.sin(t0 * a.driftX + a.phase)) * w
@@ -443,31 +460,33 @@ export default function DrawSurface({
       g.fillRect(0, 0, w, h)
       g.restore()
     }
-    // wavy currents: soft undulating lines of light flowing through the
-    // room, layered beneath the dot field
-    for (let i = 0; i < 6; i++) {
-      const baseY = h * ((i + 0.5) / 6 + 0.04 * Math.sin(t0 * 0.06 + i * 2.1))
-      const amp = h * (0.04 + 0.03 * Math.sin(i * 1.4 + t0 * 0.045))
-      const speed = 0.07 + (i % 3) * 0.04
-      const grad = g.createLinearGradient(0, 0, w, 0)
-      const col = i % 2 === 0 ? '#5a6f8a' : '#4a5e78'
-      grad.addColorStop(0, `${col}00`)
-      grad.addColorStop(0.5, col)
-      grad.addColorStop(1, `${col}00`)
-      g.globalAlpha = 0.045 + 0.02 * Math.sin(t0 * 0.17 + i)
-      g.strokeStyle = grad
-      g.lineWidth = h * 0.025
+    // topographic waves: a 3D terrain of contour lines receding into the
+    // dark — far rows sit high and faint, near rows swell larger and
+    // brighter, all riding the same rolling height map that warps strokes
+    {
+      const ROWS = 22
       g.lineCap = 'round'
-      g.beginPath()
-      for (let x = 0; x <= w; x += 16) {
-        const y =
-          baseY +
-          amp * Math.sin((x / w) * Math.PI * 2.2 + t0 * speed * Math.PI * 2 + i * 1.9) +
-          amp * 0.5 * Math.sin((x / w) * Math.PI * 5.5 - t0 * speed * 2.6 + i)
-        if (x === 0) g.moveTo(x, y)
-        else g.lineTo(x, y)
+      for (let r = 0; r < ROWS; r++) {
+        const v = r / (ROWS - 1)
+        const persp = 0.3 + 0.7 * v ** 1.4 // perspective: near rows larger
+        const rowY = h * (0.08 + 0.88 * v ** 1.3)
+        const ampl = h * 0.075 * persp
+        const grad = g.createLinearGradient(0, 0, w, 0)
+        const col = r % 2 === 0 ? '#5a6f8a' : '#4a5e78'
+        grad.addColorStop(0, `${col}00`)
+        grad.addColorStop(0.5, col)
+        grad.addColorStop(1, `${col}00`)
+        g.strokeStyle = grad
+        g.globalAlpha = 0.03 + 0.055 * v
+        g.lineWidth = 1 + 1.6 * persp
+        g.beginPath()
+        for (let x = 0; x <= w; x += 14) {
+          const y = rowY - (terrainH(x / w, v * 1.6, t0) * 0.5 + 0.5) * ampl
+          if (x === 0) g.moveTo(x, y)
+          else g.lineTo(x, y)
+        }
+        g.stroke()
       }
-      g.stroke()
     }
     // interactive dot field: a grid of faint dots that scatter away from
     // your cursor/fingertips as you move, and drift on a slowly wandering
@@ -630,7 +649,7 @@ export default function DrawSurface({
 
       // chalk strokes are powdery stipple, not a ribbon
       if (pen.tool === 'chalk') {
-        const pts = smoothPoints(s.points)
+        const pts = smoothPoints(s.points).map(warpPt)
         g.shadowBlur = 0
         for (let i = 0; i < pts.length; i++) {
           const p = pts[i]
@@ -666,7 +685,7 @@ export default function DrawSurface({
       // variable-width ribbon polygon (perfect-freehand style): offset the
       // centreline by a per-point half-width and fill the closed outline,
       // so the mark reads as one calligraphic brush stroke
-      const pts = smoothPoints(s.points)
+      const pts = smoothPoints(s.points).map(warpPt)
       if (pts.length < 2) continue
       const n = pts.length
       const left: number[] = []
