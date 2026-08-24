@@ -8,6 +8,8 @@ export interface Stroke {
   points: Point[]
   pen: string
   bornAt: number
+  /** per-stroke hue rotation (degrees) so every mark is its own colour */
+  hue?: number
 }
 
 export interface NoteEvent {
