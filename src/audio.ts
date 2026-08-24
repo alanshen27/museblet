@@ -77,14 +77,20 @@ export function playNote(
     midiToFreq(midi + pen.octaveShift * 12) * (1 + (Math.random() - 0.5) * 0.004)
   const vel = velocity / 127
 
+  // long notes are pad material: bloom in slowly instead of striking,
+  // which keeps the harmonic bed from sounding like piano hits
+  const isPad = dur > 1.2
+  const attack = isPad ? Math.max(pen.attack, dur * 0.45) : pen.attack
+  const release = isPad ? Math.max(pen.release, 2.2) : pen.release
+
   const gain = ac.createGain()
-  const peak = 0.1 + vel * 0.3
+  const peak = (isPad ? 0.05 : 0.1) + vel * (isPad ? 0.18 : 0.3)
   gain.gain.setValueAtTime(0, now)
-  gain.gain.linearRampToValueAtTime(peak, now + pen.attack)
-  gain.gain.setValueAtTime(peak, now + Math.max(pen.attack, dur))
+  gain.gain.linearRampToValueAtTime(peak, now + attack)
+  gain.gain.setValueAtTime(peak, now + Math.max(attack, dur))
   gain.gain.exponentialRampToValueAtTime(
     0.001,
-    now + Math.max(pen.attack, dur) + pen.release,
+    now + Math.max(attack, dur) + release,
   )
 
   const filter = ac.createBiquadFilter()
@@ -93,7 +99,7 @@ export function playNote(
   filter.frequency.setValueAtTime(pen.filterBase + vel * pen.filterEnv, now)
   filter.frequency.exponentialRampToValueAtTime(
     Math.max(100, pen.filterBase),
-    now + dur + pen.release,
+    now + dur + release,
   )
 
   filter.connect(gain)
@@ -101,7 +107,7 @@ export function playNote(
   gain.connect(reverb!)
   gain.connect(delaySend!)
 
-  const stopAt = now + dur + pen.release + 0.1
+  const stopAt = now + dur + release + 0.1
   for (const cents of [pen.detune, -pen.detune]) {
     const osc = ac.createOscillator()
     osc.type = pen.wave

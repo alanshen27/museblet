@@ -2,13 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import DrawSurface from './DrawSurface'
 import { playNote } from './audio'
 import { bindInlet, isMax, outletMessage, outletNote } from './max'
-import {
-  SCALES,
-  strokesToNotes,
-  yToMidi,
-  type NoteEvent,
-  type Stroke,
-} from './music'
+import { SCALES, strokesToNotes, type NoteEvent, type Stroke } from './music'
 import { chordAt, snapToChord } from './harmony'
 import { PENS, type PenId } from './pens'
 import './App.css'
@@ -44,9 +38,11 @@ export default function App() {
   )
 
   // live performance: the surface sings under the pen while drawing.
-  // Notes are throttled, snapped to the current chord, and leaps are
-  // reined in so it phrases instead of running scales.
-  const liveRef = useRef({ t: 0, midi: -1 })
+  // Instead of playing raw y-positions (which reads as scale-running),
+  // the pen plays a repeating melodic cell of chord tones: y picks the
+  // register, the cell supplies the phrase, and triggers land on an
+  // eighth-note grid so it feels composed rather than glissando.
+  const liveRef = useRef({ t: 0, midi: -1, step: 0 })
   const lastDrawRef = useRef(0)
   const tempoRef = useRef(tempo)
   tempoRef.current = tempo
@@ -57,19 +53,32 @@ export default function App() {
       const now = performance.now()
       lastDrawRef.current = now
       const live = liveRef.current
-      if (now - live.t < 180) return
-      const chord = chordAt(scaleRef.current, Math.floor(now / barMs()))
-      let midi = snapToChord(yToMidi(p.y, scaleRef.current), chord)
-      // rein in wild leaps: stay within a sixth of the last note
-      if (live.midi >= 0) {
-        while (midi - live.midi > 9) midi -= 12
-        while (live.midi - midi > 9) midi += 12
+      // quantize triggers to an eighth-note grid (min a full eighth apart)
+      const eighth = barMs() / 4
+      if (now - live.t < eighth) return
+      // rest roughly every third slot: phrases need air
+      live.step++
+      if (live.step % 3 === 2) {
+        live.t = now
+        return
       }
-      if (midi === live.midi && now - live.t < 400) return
+      const chord = chordAt(scaleRef.current, Math.floor(now / barMs()))
+      // melodic cell over chord tones: root -> third -> fifth -> third
+      const cell = [0, 1, 2, 1]
+      const tone = chord[cell[live.step % cell.length] % chord.length]
+      // y picks the register (two octaves of range), never the raw pitch
+      const register = Math.round((1 - p.y) * 2)
+      let midi = tone + register * 12
+      midi = snapToChord(midi, chord)
+      if (live.midi >= 0) {
+        while (midi - live.midi > 7) midi -= 12
+        while (live.midi - midi > 7) midi += 12
+      }
+      if (midi === live.midi && now - live.t < eighth * 2) return
       live.midi = midi
       live.t = now
-      const velocity = Math.round(30 + p.pressure * 70)
-      emit({ timeMs: 0, pen: penId, midi, velocity, durationMs: 380 })
+      const velocity = Math.round(24 + p.pressure * 46)
+      emit({ timeMs: 0, pen: penId, midi, velocity, durationMs: 520 })
     },
     [penId, emit],
   )
@@ -86,15 +95,22 @@ export default function App() {
       if (bar === lastBar) return
       lastBar = bar
       const chord = chordAt(scaleRef.current, bar)
-      const dur = barMs() * 1.1
-      for (const m of chord) {
-        emit({ timeMs: 0, pen: 'velvet', midi: m, velocity: 26, durationMs: dur })
-      }
+      const dur = barMs() * 1.4
+      // open voicing: root + fifth low, colour tone floated an octave up
+      emit({ timeMs: 0, pen: 'velvet', midi: chord[0], velocity: 20, durationMs: dur })
+      emit({ timeMs: 0, pen: 'velvet', midi: chord[2], velocity: 18, durationMs: dur })
+      emit({
+        timeMs: 0,
+        pen: 'velvet',
+        midi: chord[1] + 12,
+        velocity: 14,
+        durationMs: dur,
+      })
       emit({
         timeMs: 0,
         pen: 'ember',
         midi: chord[0] - 24,
-        velocity: 42,
+        velocity: 30,
         durationMs: dur,
       })
     }, 120)
