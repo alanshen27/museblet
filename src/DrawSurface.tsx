@@ -55,10 +55,10 @@ interface Dust {
 }
 
 // strokes settle, linger as ghosts, then dissolve to make way for new marks
-const SETTLE_MS = 5000
-const GHOST_ALPHA = 0.4
-const LINGER_MS = 12000
-const DISSOLVE_MS = 6000
+const SETTLE_MS = 3000
+const GHOST_ALPHA = 0.35
+const LINGER_MS = 5000
+const DISSOLVE_MS = 3000
 
 interface Pt {
   x: number
