@@ -7,12 +7,16 @@ interface Props {
   onStrokesChange: (strokes: Stroke[]) => void
   playheadX: number | null // 0..1 while playing
   penId: string
-  onDrawPoint?: (p: {
-    x: number
-    y: number
-    pressure: number
-    speed: number // normalized units per second
-  }) => void
+  onDrawPoint?: (
+    pointerId: number,
+    p: {
+      x: number
+      y: number
+      pressure: number
+      speed: number // normalized units per second
+    },
+  ) => void
+  onDrawEnd?: (pointerId: number) => void
 }
 
 interface Particle {
@@ -156,6 +160,7 @@ export default function DrawSurface({
   playheadX,
   penId,
   onDrawPoint,
+  onDrawEnd,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // multi-touch: each active pointer draws (and sings) its own stroke
@@ -670,6 +675,7 @@ export default function DrawSurface({
   const endPointer = (pointerId: number) => {
     activeStrokes.current.delete(pointerId)
     pointerState.current.delete(pointerId)
+    onDrawEnd?.(pointerId)
   }
 
   return (
@@ -687,7 +693,7 @@ export default function DrawSurface({
         const p0 = toPoint(e)
         const pen = getPen(penId)
         const canvas = canvasRef.current
-        onDrawPoint?.(p0)
+        onDrawPoint?.(e.pointerId, p0)
         // firework pen dabs: drop a blob, no stroke
         if (pen.tool === 'firework' && canvas) {
           blobs.current.push({
@@ -714,7 +720,7 @@ export default function DrawSurface({
         const p = toPoint(e)
         stroke.points.push(p)
         stroke.bornAt = performance.now()
-        onDrawPoint?.(p)
+        onDrawPoint?.(e.pointerId, p)
         const canvas = canvasRef.current
         const pen = getPen(penId)
         if (canvas) {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import DrawSurface from './DrawSurface'
-import { playNote } from './audio'
+import { glideStop, glideTo, playNote } from './audio'
 import { bindInlet, isMax, outletMessage, outletNote } from './max'
 import { SCALES, strokesToNotes, type NoteEvent, type Stroke } from './music'
 import { chordAt, snapToChord } from './harmony'
@@ -49,21 +49,36 @@ export default function App() {
   const barMs = () => (60000 / tempoRef.current) * 2
 
   const onDrawPoint = useCallback(
-    (p: { x: number; y: number; pressure: number; speed: number }) => {
+    (
+      pointerId: number,
+      p: { x: number; y: number; pressure: number; speed: number },
+    ) => {
       const now = performance.now()
       lastDrawRef.current = now
       const live = liveRef.current
+      const energyNow = Math.min(1, p.speed * 1.1)
+      // continuous gesture voice (browser mode): one sustained tone per
+      // finger that glides between chord tones — the melody is a line,
+      // not fragments. Max mode keeps the discrete note protocol below.
+      if (!inMax) {
+        const chordNow = chordAt(scaleRef.current, Math.floor(now / barMs()))
+        const glideMidi = snapToChord(
+          Math.round(48 + (1 - p.y) * 30),
+          chordNow,
+        )
+        glideTo(
+          pointerId,
+          penId,
+          glideMidi,
+          0.04 + p.pressure * 0.08 + energyNow * 0.05,
+        )
+      }
       // note density follows the hand's energy: fast sweeps play dense
       // sixteenth runs, slow drags leave long spacious notes
-      const energy = Math.min(1, p.speed * 1.1)
+      const energy = energyNow
       const gap = (barMs() / 8) * (3 - energy * 2.5) // 3/8-bar .. sixteenth
       if (now - live.t < gap) return
-      // occasional breath, but sparse — constant rests read as stutter
       live.step++
-      if (live.step % 5 === 4) {
-        live.t = now
-        return
-      }
       const chord = chordAt(scaleRef.current, Math.floor(now / barMs()))
       // melodic cell over chord tones: root -> third -> fifth -> third
       const cell = [0, 1, 2, 1]
@@ -79,14 +94,20 @@ export default function App() {
       if (midi === live.midi && now - live.t < gap * 2) return
       live.midi = midi
       live.t = now
-      // legato: each note rings past the next trigger so the line is
-      // continuous — no dead air between notes while the hand moves
-      const velocity = Math.round(24 + p.pressure * 30 + energy * 30)
+      // in the browser the glide voice carries the melody; these discrete
+      // notes are soft harp-like accents on top (and the whole line in Max)
+      const velocity = Math.round(
+        (inMax ? 24 : 12) + p.pressure * 24 + energy * 24,
+      )
       const durationMs = gap * 1.8 + 200
       emit({ timeMs: 0, pen: penId, midi, velocity, durationMs })
     },
-    [penId, emit],
+    [penId, emit, inMax],
   )
+
+  const onDrawEnd = useCallback((pointerId: number) => {
+    glideStop(pointerId)
+  }, [])
 
   // harmonic bed: soft pad chords + bass root underneath, while playing
   // or while the pen is moving
@@ -188,6 +209,7 @@ export default function App() {
           playheadX={playheadX}
           penId={penId}
           onDrawPoint={onDrawPoint}
+          onDrawEnd={onDrawEnd}
         />
       </main>
       <nav className="dock">
