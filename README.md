@@ -14,6 +14,10 @@ Draw on a surface, hear it as music. A React app (built to static HTML) that run
   - **Ember** — triangle bass, flickering orange
   - **Crystal** — bell-like sine an octave up, sparkling white
 
+## Hand tracking
+
+Toggle the ✋ in the dock to conduct with your hands via the camera (MediaPipe, up to two hands). Each fingertip projects a small cursor dot onto the surface; pinching a finger to your thumb draws and plays with that finger's own pen — index, middle, ring, and pinky each control a different tool, and pinch tightness acts as pressure. Touch/mouse drawing still works as a fallback. Requires camera permission and network access (the model loads from a CDN).
+
 ## Run in the browser
 
 ```sh

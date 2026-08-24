@@ -2,21 +2,37 @@ import { useCallback, useEffect, useRef } from 'react'
 import type { Stroke } from './music'
 import { getPen } from './pens'
 
+export interface DrawPoint {
+  x: number
+  y: number
+  pressure: number
+  speed: number // normalized units per second
+}
+
+/** a floating cursor projected onto the surface (e.g. a tracked fingertip) */
+export interface SurfaceCursor {
+  x: number
+  y: number
+  color: string
+  active: boolean
+}
+
+/** imperative surface API so non-pointer sources (hand tracking) can draw */
+export interface DrawHandle {
+  strokeStart: (id: number, penId: string, p: DrawPoint) => void
+  strokeMove: (id: number, penId: string, p: DrawPoint) => void
+  strokeEnd: (id: number) => void
+  setCursors: (cursors: SurfaceCursor[]) => void
+}
+
 interface Props {
   strokes: Stroke[]
   onStrokesChange: (strokes: Stroke[]) => void
   playheadX: number | null // 0..1 while playing
   penId: string
-  onDrawPoint?: (
-    pointerId: number,
-    p: {
-      x: number
-      y: number
-      pressure: number
-      speed: number // normalized units per second
-    },
-  ) => void
+  onDrawPoint?: (pointerId: number, penId: string, p: DrawPoint) => void
   onDrawEnd?: (pointerId: number) => void
+  handleRef?: React.RefObject<DrawHandle | null>
 }
 
 interface Particle {
@@ -169,6 +185,7 @@ export default function DrawSurface({
   penId,
   onDrawPoint,
   onDrawEnd,
+  handleRef,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // multi-touch: each active pointer draws (and sings) its own stroke
@@ -191,6 +208,12 @@ export default function DrawSurface({
   strokesRef.current = strokes
   const onStrokesChangeRef = useRef(onStrokesChange)
   onStrokesChangeRef.current = onStrokesChange
+  const onDrawPointRef = useRef(onDrawPoint)
+  onDrawPointRef.current = onDrawPoint
+  const onDrawEndRef = useRef(onDrawEnd)
+  onDrawEndRef.current = onDrawEnd
+  // projected cursor dots (tracked fingertips hovering over the surface)
+  const cursors = useRef<SurfaceCursor[]>([])
   const playheadRef = useRef(playheadX)
   const prevPlayheadRef = useRef<number | null>(null)
   playheadRef.current = playheadX
@@ -316,6 +339,16 @@ export default function DrawSurface({
       g.fill()
     }
     g.globalAlpha = 1
+
+    // released strokes keep being eaten tail-first until nothing is left,
+    // so lifting the pen lets the comet finish its journey and vanish
+    const activeSet = new Set(activeStrokes.current.values())
+    for (const s of strokesRef.current) {
+      if (!activeSet.has(s) && s.points.length > 0) {
+        s.points.shift()
+        s.points.shift()
+      }
+    }
 
     // strokes: gradient ribbons of light that lift the dark room
     g.lineCap = 'round'
@@ -618,9 +651,26 @@ export default function DrawSurface({
     g.globalAlpha = 1
     g.shadowBlur = 0
 
+    // projected fingertip cursors: tiny dots of light hovering on the surface
+    g.globalCompositeOperation = 'lighter'
+    for (const c of cursors.current) {
+      const pulse = 0.75 + 0.25 * Math.sin(now / 220)
+      softMote(
+        g,
+        c.x * w,
+        c.y * h,
+        c.active ? 14 : 8 * pulse,
+        c.color,
+        c.active ? 0.9 : 0.45,
+      )
+    }
+    g.globalCompositeOperation = 'source-over'
+    g.globalAlpha = 1
+
     // fully dissolved strokes leave the canvas (and the music)
     const living = strokesRef.current.filter(
-      (s) => now - s.bornAt < LINGER_MS + DISSOLVE_MS,
+      (s) =>
+        s.points.length > 1 && now - s.bornAt < LINGER_MS + DISSOLVE_MS,
     )
     if (living.length !== strokesRef.current.length) {
       onStrokesChangeRef.current(living)
@@ -680,11 +730,74 @@ export default function DrawSurface({
     return { x, y, pressure, speed: state.speed }
   }
 
-  const endPointer = (pointerId: number) => {
-    activeStrokes.current.delete(pointerId)
-    pointerState.current.delete(pointerId)
-    onDrawEnd?.(pointerId)
-  }
+  // shared stroke lifecycle: pointer events and hand tracking both land here
+  const strokeStart = useCallback(
+    (id: number, pid: string, p0: DrawPoint) => {
+      const pen = getPen(pid)
+      const canvas = canvasRef.current
+      onDrawPointRef.current?.(id, pid, p0)
+      // firework pen dabs: drop a blob, no stroke
+      if (pen.tool === 'firework' && canvas) {
+        blobs.current.push({
+          x: p0.x * canvas.width,
+          y: p0.y * canvas.height,
+          color: pen.color,
+          glow: pen.glow,
+          born: performance.now(),
+          size: 6 + p0.pressure * 10,
+        })
+        return
+      }
+      const stroke: Stroke = {
+        points: [p0],
+        pen: pid,
+        bornAt: performance.now(),
+      }
+      activeStrokes.current.set(id, stroke)
+      onStrokesChangeRef.current([...strokesRef.current, stroke])
+    },
+    [],
+  )
+
+  const strokeMove = useCallback((id: number, pid: string, p: DrawPoint) => {
+    const stroke = activeStrokes.current.get(id)
+    if (!stroke) return
+    stroke.points.push(p)
+    while (stroke.points.length > TRAIL_POINTS) stroke.points.shift()
+    stroke.bornAt = performance.now()
+    onDrawPointRef.current?.(id, pid, p)
+    const canvas = canvasRef.current
+    const pen = getPen(pid)
+    if (canvas) {
+      if (pen.tool === 'chalk') {
+        spawnChalk(p.x * canvas.width, p.y * canvas.height, pen.color, 4)
+      } else if (pen.tool !== 'rain') {
+        spawnTrail(p.x * canvas.width, p.y * canvas.height, pen.color)
+      }
+    }
+    onStrokesChangeRef.current([...strokesRef.current])
+  }, [])
+
+  const strokeEnd = useCallback((id: number) => {
+    activeStrokes.current.delete(id)
+    pointerState.current.delete(id)
+    onDrawEndRef.current?.(id)
+  }, [])
+
+  useEffect(() => {
+    if (!handleRef) return
+    handleRef.current = {
+      strokeStart,
+      strokeMove,
+      strokeEnd,
+      setCursors: (c) => {
+        cursors.current = c
+      },
+    }
+    return () => {
+      handleRef.current = null
+    }
+  }, [handleRef, strokeStart, strokeMove, strokeEnd])
 
   return (
     <canvas
@@ -698,51 +811,14 @@ export default function DrawSurface({
           weight: 0.5,
           speed: 0,
         })
-        const p0 = toPoint(e)
-        const pen = getPen(penId)
-        const canvas = canvasRef.current
-        onDrawPoint?.(e.pointerId, p0)
-        // firework pen dabs: drop a blob, no stroke
-        if (pen.tool === 'firework' && canvas) {
-          blobs.current.push({
-            x: p0.x * canvas.width,
-            y: p0.y * canvas.height,
-            color: pen.color,
-            glow: pen.glow,
-            born: performance.now(),
-            size: 6 + p0.pressure * 10,
-          })
-          return
-        }
-        const stroke: Stroke = {
-          points: [p0],
-          pen: penId,
-          bornAt: performance.now(),
-        }
-        activeStrokes.current.set(e.pointerId, stroke)
-        onStrokesChange([...strokes, stroke])
+        strokeStart(e.pointerId, penId, toPoint(e))
       }}
       onPointerMove={(e) => {
-        const stroke = activeStrokes.current.get(e.pointerId)
-        if (!stroke) return
-        const p = toPoint(e)
-        stroke.points.push(p)
-        while (stroke.points.length > TRAIL_POINTS) stroke.points.shift()
-        stroke.bornAt = performance.now()
-        onDrawPoint?.(e.pointerId, p)
-        const canvas = canvasRef.current
-        const pen = getPen(penId)
-        if (canvas) {
-          if (pen.tool === 'chalk') {
-            spawnChalk(p.x * canvas.width, p.y * canvas.height, pen.color, 4)
-          } else if (pen.tool !== 'rain') {
-            spawnTrail(p.x * canvas.width, p.y * canvas.height, pen.color)
-          }
-        }
-        onStrokesChange([...strokes])
+        if (!activeStrokes.current.has(e.pointerId)) return
+        strokeMove(e.pointerId, penId, toPoint(e))
       }}
-      onPointerUp={(e) => endPointer(e.pointerId)}
-      onPointerCancel={(e) => endPointer(e.pointerId)}
+      onPointerUp={(e) => strokeEnd(e.pointerId)}
+      onPointerCancel={(e) => strokeEnd(e.pointerId)}
     />
   )
 }

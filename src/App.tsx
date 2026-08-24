@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import DrawSurface from './DrawSurface'
+import DrawSurface, { type DrawHandle } from './DrawSurface'
+import HandLayer from './HandLayer'
 import { glideStop, glideTo, playNote } from './audio'
 import { bindInlet, isMax, outletMessage, outletNote } from './max'
 import { SCALES, strokesToNotes, type NoteEvent, type Stroke } from './music'
@@ -51,6 +52,7 @@ export default function App() {
   const onDrawPoint = useCallback(
     (
       pointerId: number,
+      pen: string,
       p: { x: number; y: number; pressure: number; speed: number },
     ) => {
       const now = performance.now()
@@ -68,7 +70,7 @@ export default function App() {
         )
         glideTo(
           pointerId,
-          penId,
+          pen,
           glideMidi,
           0.04 + p.pressure * 0.08 + energyNow * 0.05,
         )
@@ -100,14 +102,18 @@ export default function App() {
         (inMax ? 24 : 12) + p.pressure * 24 + energy * 24,
       )
       const durationMs = gap * 1.8 + 200
-      emit({ timeMs: 0, pen: penId, midi, velocity, durationMs })
+      emit({ timeMs: 0, pen, midi, velocity, durationMs })
     },
-    [penId, emit, inMax],
+    [emit, inMax],
   )
 
   const onDrawEnd = useCallback((pointerId: number) => {
     glideStop(pointerId)
   }, [])
+
+  // hand tracking: camera-tracked fingertips as input (touch stays as fallback)
+  const surfaceHandle = useRef<DrawHandle | null>(null)
+  const [handsOn, setHandsOn] = useState(false)
 
   // harmonic bed: soft pad chords + bass root underneath, while playing
   // or while the pen is moving
@@ -210,7 +216,9 @@ export default function App() {
           penId={penId}
           onDrawPoint={onDrawPoint}
           onDrawEnd={onDrawEnd}
+          handleRef={surfaceHandle}
         />
+        {handsOn && <HandLayer surface={surfaceHandle} />}
       </main>
       <nav className="dock">
         {PENS.map((p) => (
@@ -222,6 +230,15 @@ export default function App() {
             aria-label={p.name}
           />
         ))}
+        <span className="dock-sep" />
+        <button
+          className={`hand-btn ${handsOn ? 'selected' : ''}`}
+          onClick={() => setHandsOn((v) => !v)}
+          aria-label="hand tracking"
+          title="hand tracking"
+        >
+          ✋
+        </button>
         <span className="dock-sep" />
         <input
           className="tempo"
