@@ -114,12 +114,20 @@ function relaxPoints(pts: Pt[], passes = 4): Pt[] {
 }
 
 // smoothed-path cache so long strokes aren't recomputed every frame
-const smoothCache = new WeakMap<Pt[], { count: number; pts: Pt[] }>()
+const smoothCache = new WeakMap<
+  Pt[],
+  { count: number; head: Pt; pts: Pt[] }
+>()
+
+// comet trail: while drawing, the stroke's tail is eaten away so only a
+// ribbon of this many points follows the hand
+const TRAIL_POINTS = 70
 
 // Catmull-Rom resampling: turns raw pointer points into a flowing curve
 function smoothPoints(raw: Pt[], subdiv = 8): Pt[] {
   const cached = smoothCache.get(raw)
-  if (cached && cached.count === raw.length) return cached.pts
+  if (cached && cached.count === raw.length && cached.head === raw[0])
+    return cached.pts
   const pts = relaxPoints(raw)
   if (pts.length < 3) return pts
   const out: Pt[] = []
@@ -150,7 +158,7 @@ function smoothPoints(raw: Pt[], subdiv = 8): Pt[] {
     }
   }
   out.push(pts[pts.length - 1])
-  smoothCache.set(raw, { count: raw.length, pts: out })
+  smoothCache.set(raw, { count: raw.length, head: pts[0] ?? raw[0], pts: out })
   return out
 }
 
@@ -719,6 +727,7 @@ export default function DrawSurface({
         if (!stroke) return
         const p = toPoint(e)
         stroke.points.push(p)
+        while (stroke.points.length > TRAIL_POINTS) stroke.points.shift()
         stroke.bornAt = performance.now()
         onDrawPoint?.(e.pointerId, p)
         const canvas = canvasRef.current
