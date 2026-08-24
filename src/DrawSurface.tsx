@@ -439,16 +439,6 @@ export default function DrawSurface({
       trace()
       g.fill()
 
-      // wet highlight ridge along the centre
-      g.shadowBlur = 0
-      g.globalAlpha = alpha * 0.22
-      g.strokeStyle = 'rgba(255,252,244,0.8)'
-      g.lineWidth = 2
-      g.beginPath()
-      g.moveTo(x0, y0)
-      for (let i = 1; i < n; i++) g.lineTo(pts[i].x * w, pts[i].y * h)
-      g.stroke()
-
       if (pen.style === 'sparkle') {
         g.shadowBlur = 0
         g.fillStyle = pen.color
