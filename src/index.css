@@ -1,0 +1,27 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family:
+    'Inter',
+    system-ui,
+    -apple-system,
+    sans-serif;
+  color: #eaeaf2;
+  background:
+    radial-gradient(1200px 700px at 20% -10%, rgba(76, 201, 240, 0.12), transparent 60%),
+    radial-gradient(1000px 600px at 90% 110%, rgba(247, 37, 133, 0.12), transparent 60%),
+    radial-gradient(800px 500px at 60% 50%, rgba(199, 125, 255, 0.06), transparent 60%),
+    #0a0c18;
+  overflow: hidden;
+  user-select: none;
+}
