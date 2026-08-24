@@ -204,6 +204,26 @@ export function playNote(
     osc.stop(stopAt)
   }
 
+  // tinkly bell shimmer: inharmonic upper partials that ring past the body
+  if (pen.id === 'ember') {
+    for (const [ratio, amt] of [
+      [2.76, 0.25],
+      [5.4, 0.12],
+    ] as const) {
+      const partial = ac.createOscillator()
+      partial.type = 'sine'
+      partial.frequency.value = freq * ratio
+      const pGain = ac.createGain()
+      pGain.gain.setValueAtTime(peak * amt, now)
+      pGain.gain.exponentialRampToValueAtTime(0.001, now + dur * 1.4)
+      partial.connect(pGain)
+      pGain.connect(master!)
+      pGain.connect(reverb!)
+      partial.start(now)
+      partial.stop(stopAt + 0.5)
+    }
+  }
+
   if (pen.id === 'crystal') {
     const partial = ac.createOscillator()
     partial.type = 'sine'

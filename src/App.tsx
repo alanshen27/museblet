@@ -134,7 +134,7 @@ export default function App() {
       })
       emit({
         timeMs: 0,
-        pen: 'ember',
+        pen: 'velvet',
         midi: chord[0] - 24,
         velocity: 30,
         durationMs: dur,
