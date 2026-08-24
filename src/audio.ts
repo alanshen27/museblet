@@ -26,14 +26,28 @@ function getContext(): AudioContext {
     ctx = new AudioContext()
     master = ctx.createGain()
     master.gain.value = 0.45
-    master.connect(ctx.destination)
+    // gentle bus compression + top-end shelf: lets simultaneous notes
+    // stack without clipping, and takes the piercing edge off
+    const comp = ctx.createDynamicsCompressor()
+    comp.threshold.value = -18
+    comp.knee.value = 24
+    comp.ratio.value = 4
+    comp.attack.value = 0.01
+    comp.release.value = 0.3
+    const shelf = ctx.createBiquadFilter()
+    shelf.type = 'highshelf'
+    shelf.frequency.value = 3200
+    shelf.gain.value = -9
+    master.connect(shelf)
+    shelf.connect(comp)
+    comp.connect(ctx.destination)
 
     reverb = ctx.createConvolver()
     reverb.buffer = impulseResponse(ctx, 2.5, 3)
     const wet = ctx.createGain()
     wet.gain.value = 0.35
     reverb.connect(wet)
-    wet.connect(ctx.destination)
+    wet.connect(master)
 
     // dotted-feel echo for space and movement
     const delay = ctx.createDelay(1)
@@ -52,7 +66,7 @@ function getContext(): AudioContext {
     dampen.connect(feedback)
     feedback.connect(delay)
     dampen.connect(delayWet)
-    delayWet.connect(ctx.destination)
+    delayWet.connect(master)
   }
   if (ctx.state === 'suspended') void ctx.resume()
   return ctx
@@ -60,6 +74,72 @@ function getContext(): AudioContext {
 
 export function midiToFreq(midi: number): number {
   return 440 * Math.pow(2, (midi - 69) / 12)
+}
+
+// continuous gesture voice (theremin/Bloom model): while the hand moves,
+// one sustained voice glides between pitches instead of retriggering notes,
+// so the line never fragments. One voice per pointer id.
+interface GlideVoice {
+  osc: OscillatorNode
+  osc2: OscillatorNode
+  gain: GainNode
+  filter: BiquadFilterNode
+  penId: string
+}
+const glides = new Map<number, GlideVoice>()
+
+export function glideTo(
+  pointerId: number,
+  penId: string,
+  midi: number,
+  level: number,
+) {
+  const ac = getContext()
+  const pen = getPen(penId)
+  let v = glides.get(pointerId)
+  if (v && v.penId !== penId) {
+    glideStop(pointerId)
+    v = undefined
+  }
+  const now = ac.currentTime
+  if (!v) {
+    const gain = ac.createGain()
+    gain.gain.value = 0
+    const filter = ac.createBiquadFilter()
+    filter.type = 'lowpass'
+    filter.Q.value = 0.8
+    filter.frequency.value = Math.min(3200, pen.filterBase + pen.filterEnv * 0.5)
+    filter.connect(gain)
+    gain.connect(master!)
+    gain.connect(reverb!)
+    gain.connect(delaySend!)
+    const mk = (cents: number) => {
+      const osc = ac.createOscillator()
+      osc.type = pen.wave
+      osc.frequency.value = midiToFreq(midi + pen.octaveShift * 12)
+      osc.detune.value = cents
+      osc.connect(filter)
+      osc.start(now)
+      return osc
+    }
+    v = { osc: mk(pen.detune), osc2: mk(-pen.detune), gain, filter, penId }
+    glides.set(pointerId, v)
+  }
+  const freq = midiToFreq(midi + pen.octaveShift * 12)
+  // portamento: ease toward the new pitch rather than stepping
+  v.osc.frequency.setTargetAtTime(freq, ac.currentTime, 0.08)
+  v.osc2.frequency.setTargetAtTime(freq, ac.currentTime, 0.08)
+  v.gain.gain.setTargetAtTime(level, ac.currentTime, 0.09)
+}
+
+export function glideStop(pointerId: number) {
+  const v = glides.get(pointerId)
+  if (!v || !ctx) return
+  glides.delete(pointerId)
+  const now = ctx.currentTime
+  v.gain.gain.setTargetAtTime(0, now, 0.5)
+  v.osc.stop(now + 3)
+  v.osc2.stop(now + 3)
 }
 
 export function playNote(
@@ -80,11 +160,13 @@ export function playNote(
   // long notes are pad material: bloom in slowly instead of striking,
   // which keeps the harmonic bed from sounding like piano hits
   const isPad = dur > 1.2
-  const attack = isPad ? Math.max(pen.attack, dur * 0.45) : pen.attack
-  const release = isPad ? Math.max(pen.release, 2.2) : pen.release
+  const attack = isPad ? Math.max(pen.attack, dur * 0.45) : Math.max(pen.attack, 0.03)
+  // melodic notes get a long tail too, so consecutive notes blend
+  // into a continuous line instead of separated hits
+  const release = isPad ? Math.max(pen.release, 2.2) : Math.max(pen.release, 1.4)
 
   const gain = ac.createGain()
-  const peak = (isPad ? 0.05 : 0.1) + vel * (isPad ? 0.18 : 0.3)
+  const peak = (isPad ? 0.05 : 0.08) + vel * (isPad ? 0.18 : 0.22)
   gain.gain.setValueAtTime(0, now)
   gain.gain.linearRampToValueAtTime(peak, now + attack)
   gain.gain.setValueAtTime(peak, now + Math.max(attack, dur))
@@ -95,8 +177,12 @@ export function playNote(
 
   const filter = ac.createBiquadFilter()
   filter.type = 'lowpass'
-  filter.Q.value = 3
-  filter.frequency.setValueAtTime(pen.filterBase + vel * pen.filterEnv, now)
+  filter.Q.value = 0.9
+  // cap the brightness — unbounded filter sweeps read as piercing
+  filter.frequency.setValueAtTime(
+    Math.min(3800, pen.filterBase + vel * pen.filterEnv),
+    now,
+  )
   filter.frequency.exponentialRampToValueAtTime(
     Math.max(100, pen.filterBase),
     now + dur + release,
