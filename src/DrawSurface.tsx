@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import type { Stroke } from './music'
 import { getPen, PENS } from './pens'
 import { playExplosion } from './audio'
+import { getStrokeTexture } from './textures'
 
 export interface DrawPoint {
   x: number
@@ -651,6 +652,28 @@ export default function DrawSurface({
         g.clip()
         g.globalCompositeOperation = 'lighter'
         g.shadowBlur = 0
+        // fal.ai-generated abstract texture for this colour family, when
+        // available — tiled across the ribbon; motifs still dance on top
+        const tex = getStrokeTexture(hueDeg)
+        if (tex) {
+          let minX = Infinity
+          let minY = Infinity
+          let maxX = -Infinity
+          let maxY = -Infinity
+          for (const p of pts) {
+            minX = Math.min(minX, p.x * w)
+            minY = Math.min(minY, p.y * h)
+            maxX = Math.max(maxX, p.x * w)
+            maxY = Math.max(maxY, p.y * h)
+          }
+          g.globalAlpha = alpha * 0.5
+          const T = 512
+          for (let tx = minX - 80; tx < maxX + 80; tx += T) {
+            for (let ty = minY - 80; ty < maxY + 80; ty += T) {
+              g.drawImage(tex, tx, ty, T, T)
+            }
+          }
+        }
         for (let i = 3; i < n - 3; i += 9) {
           const p = pts[i]
           const r1 = Math.sin(i * 12.9898 + s.bornAt) * 43758.5453

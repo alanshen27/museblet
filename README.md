@@ -18,6 +18,10 @@ Draw on a surface, hear it as music. A React app (built to static HTML) that run
 
 Press **Tab** to summon the control dock (hidden by default), then toggle the ✋ to conduct with your hands via the camera (MediaPipe, up to two hands). Your index fingertip projects a glowing cursor orb (the thumb shows as a small anchor — the activation point); pinch index to thumb to draw and play, with pinch tightness acting as pressure. Bunch a fist to summon a radial pen wheel around your hand: a small twist of the fist spins the highlight, open your hand to select that colour/sound. Each hand keeps its own pen. Fingertip positions are exponentially smoothed and glitch-guarded to cancel camera shake and tracking dropouts. Touch/mouse drawing still works as a fallback. Requires camera permission and network access (the model loads from a CDN).
 
+## AI stroke textures (optional)
+
+With a [fal.ai](https://fal.ai) API key, strokes are filled with AI-generated abstract textures (one per colour family: night sky, embers, garden, petals). Open the app with `?falKey=YOUR_KEY` once — it is stored in localStorage for later visits. Never commit the key. Without a key the procedural scene motifs are used.
+
 ## Run in the browser
 
 ```sh
