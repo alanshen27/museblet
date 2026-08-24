@@ -2,7 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import DrawSurface from './DrawSurface'
 import { playNote } from './audio'
 import { bindInlet, isMax, outletMessage, outletNote } from './max'
-import { SCALES, strokesToNotes, type NoteEvent, type Stroke } from './music'
+import {
+  SCALES,
+  strokesToNotes,
+  yToMidi,
+  type NoteEvent,
+  type Stroke,
+} from './music'
 import { PENS, type PenId } from './pens'
 import './App.css'
 
@@ -34,6 +40,29 @@ export default function App() {
       else playNote(n.pen, n.midi, n.velocity, n.durationMs)
     },
     [inMax],
+  )
+
+  // live performance: the surface sings under the pen while drawing
+  const liveRef = useRef({ t: 0, midi: -1 })
+  const onDrawPoint = useCallback(
+    (p: { x: number; y: number; pressure: number }) => {
+      const midi = yToMidi(p.y, scaleRef.current)
+      const now = performance.now()
+      const live = liveRef.current
+      if (midi === live.midi && now - live.t < 120) return
+      live.midi = midi
+      live.t = now
+      const velocity = Math.round(35 + p.pressure * 85)
+      const n: NoteEvent = {
+        timeMs: 0,
+        pen: penId,
+        midi,
+        velocity,
+        durationMs: 220,
+      }
+      emit(n)
+    },
+    [penId, emit],
   )
 
   const stop = useCallback(() => {
@@ -101,6 +130,7 @@ export default function App() {
           onStrokesChange={setStrokes}
           playheadX={playheadX}
           penId={penId}
+          onDrawPoint={onDrawPoint}
         />
       </main>
       <nav className="dock">

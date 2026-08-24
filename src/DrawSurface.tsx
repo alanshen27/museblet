@@ -7,6 +7,7 @@ interface Props {
   onStrokesChange: (strokes: Stroke[]) => void
   playheadX: number | null // 0..1 while playing
   penId: string
+  onDrawPoint?: (p: { x: number; y: number; pressure: number }) => void
 }
 
 interface Particle {
@@ -37,9 +38,11 @@ interface Dust {
   size: number
 }
 
-// strokes settle from a bright flash into a subtle ghost over this long
+// strokes settle, linger as ghosts, then dissolve to make way for new marks
 const SETTLE_MS = 6000
-const GHOST_ALPHA = 0.35
+const GHOST_ALPHA = 0.4
+const LINGER_MS = 30000
+const DISSOLVE_MS = 12000
 
 interface Pt {
   x: number
@@ -47,8 +50,29 @@ interface Pt {
   pressure: number
 }
 
+// moving-average pass: irons out hand jitter before curve fitting
+function relaxPoints(pts: Pt[], passes = 2): Pt[] {
+  let cur = pts
+  for (let p = 0; p < passes; p++) {
+    if (cur.length < 5) break
+    const next: Pt[] = [cur[0]]
+    for (let i = 1; i < cur.length - 1; i++) {
+      next.push({
+        x: (cur[i - 1].x + cur[i].x * 2 + cur[i + 1].x) / 4,
+        y: (cur[i - 1].y + cur[i].y * 2 + cur[i + 1].y) / 4,
+        pressure:
+          (cur[i - 1].pressure + cur[i].pressure * 2 + cur[i + 1].pressure) / 4,
+      })
+    }
+    next.push(cur[cur.length - 1])
+    cur = next
+  }
+  return cur
+}
+
 // Catmull-Rom resampling: turns raw pointer points into a flowing curve
-function smoothPoints(pts: Pt[], subdiv = 6): Pt[] {
+function smoothPoints(raw: Pt[], subdiv = 8): Pt[] {
+  const pts = relaxPoints(raw)
   if (pts.length < 3) return pts
   const out: Pt[] = []
   for (let i = 0; i < pts.length - 1; i++) {
@@ -86,6 +110,7 @@ export default function DrawSurface({
   onStrokesChange,
   playheadX,
   penId,
+  onDrawPoint,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const drawing = useRef(false)
@@ -95,6 +120,8 @@ export default function DrawSurface({
   const dust = useRef<Dust[]>([])
   const strokesRef = useRef(strokes)
   strokesRef.current = strokes
+  const onStrokesChangeRef = useRef(onStrokesChange)
+  onStrokesChangeRef.current = onStrokesChange
   const playheadRef = useRef(playheadX)
   const prevPlayheadRef = useRef<number | null>(null)
   playheadRef.current = playheadX
@@ -196,7 +223,12 @@ export default function DrawSurface({
       const pen = getPen(s.pen)
       const age = now - s.bornAt
       const settle = Math.min(1, age / SETTLE_MS)
-      const baseAlpha = 1 - settle * (1 - GHOST_ALPHA)
+      let baseAlpha = 1 - settle * (1 - GHOST_ALPHA)
+      // after lingering, the mark slowly dissolves back into the dark
+      if (age > LINGER_MS) {
+        baseAlpha *= Math.max(0, 1 - (age - LINGER_MS) / DISSOLVE_MS)
+      }
+      if (baseAlpha <= 0) continue
       const flicker =
         pen.style === 'flicker' ? 0.85 + 0.15 * Math.sin(now / 130) : 1
 
@@ -227,7 +259,7 @@ export default function DrawSurface({
         // organic swell: width breathes along the curve like a brush lifting
         const swell = 0.75 + 0.25 * Math.sin(t * Math.PI * 3 + s.bornAt)
         const width =
-          (1.5 + b.pressure * 9) * pen.lineWidth * (0.2 + taper * 0.8) * swell
+          (6 + b.pressure * 26) * pen.lineWidth * (0.25 + taper * 0.75) * swell
         // near the playhead, the stroke gently brightens
         const nearBeam =
           px !== null ? Math.max(0, 1 - Math.abs(b.x - px) * 18) : 0
@@ -240,21 +272,40 @@ export default function DrawSurface({
         grad.addColorStop(1, mixT < 0.5 ? pen.colorB : pen.color)
 
         // soft halo
-        g.globalAlpha = alpha * 0.18
+        g.globalAlpha = alpha * 0.14
         g.strokeStyle = pen.color
         g.shadowColor = pen.glow
         g.shadowBlur = pen.style === 'soft' ? 26 : 14
-        g.lineWidth = width * 2.6
+        g.lineWidth = width * 1.9
         g.beginPath()
         g.moveTo(a.x * w, a.y * h)
         g.lineTo(b.x * w, b.y * h)
         g.stroke()
 
-        // gradient core
-        g.globalAlpha = alpha * 0.9
+        // painterly body: layered bristle ribbons offset across the path
+        const dx = b.x * w - a.x * w
+        const dy = b.y * h - a.y * h
+        const len = Math.hypot(dx, dy) || 1
+        const nx = -dy / len
+        const ny = dx / len
+        g.shadowBlur = pen.style === 'crisp' ? 2 : 6
+        for (let bi = 0; bi < 4; bi++) {
+          const off = (bi / 3 - 0.5) * width * 0.7
+          const wob = Math.sin(t * Math.PI * 5 + bi * 2.1 + s.bornAt) * width * 0.12
+          const o = off + wob
+          g.globalAlpha = alpha * (bi === 1 || bi === 2 ? 0.55 : 0.3)
+          g.strokeStyle = grad
+          g.lineWidth = width * (0.55 - Math.abs(bi / 3 - 0.5) * 0.35)
+          g.beginPath()
+          g.moveTo(a.x * w + nx * o, a.y * h + ny * o)
+          g.lineTo(b.x * w + nx * o, b.y * h + ny * o)
+          g.stroke()
+        }
+
+        // bright wet centre
+        g.globalAlpha = alpha * 0.85
         g.strokeStyle = grad
-        g.shadowBlur = pen.style === 'crisp' ? 2 : 7
-        g.lineWidth = width
+        g.lineWidth = width * 0.45
         g.beginPath()
         g.moveTo(a.x * w, a.y * h)
         g.lineTo(b.x * w, b.y * h)
@@ -351,6 +402,14 @@ export default function DrawSurface({
     particles.current = alive
     g.globalAlpha = 1
     g.shadowBlur = 0
+
+    // fully dissolved strokes leave the canvas (and the music)
+    const living = strokesRef.current.filter(
+      (s) => now - s.bornAt < LINGER_MS + DISSOLVE_MS,
+    )
+    if (living.length !== strokesRef.current.length) {
+      onStrokesChangeRef.current(living)
+    }
   }, [])
 
   // continuous render loop for fades, dust, and particles
@@ -416,11 +475,13 @@ export default function DrawSurface({
         drawing.current = true
         lastMove.current = null
         penWeight.current = 0.5
+        const p0 = toPoint(e)
         currentStroke.current = {
-          points: [toPoint(e)],
+          points: [p0],
           pen: penId,
           bornAt: performance.now(),
         }
+        onDrawPoint?.(p0)
         onStrokesChange([...strokes, currentStroke.current])
       }}
       onPointerMove={(e) => {
@@ -428,6 +489,7 @@ export default function DrawSurface({
         const p = toPoint(e)
         currentStroke.current.points.push(p)
         currentStroke.current.bornAt = performance.now()
+        onDrawPoint?.(p)
         const canvas = canvasRef.current
         if (canvas) {
           spawnTrail(p.x * canvas.width, p.y * canvas.height, getPen(penId).color)
