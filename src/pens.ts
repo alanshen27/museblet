@@ -1,5 +1,8 @@
 export type PenId = 'neon' | 'pulse' | 'velvet' | 'ember' | 'crystal'
 
+/** what the pen physically does on the surface */
+export type PenTool = 'ink' | 'firework' | 'chalk' | 'rain'
+
 export interface Pen {
   id: PenId
   name: string
@@ -16,6 +19,7 @@ export interface Pen {
   octaveShift: number
   lineWidth: number
   style: 'glow' | 'sparkle' | 'soft' | 'flicker' | 'crisp'
+  tool: PenTool
 }
 
 export const PENS: Pen[] = [
@@ -34,6 +38,7 @@ export const PENS: Pen[] = [
     octaveShift: 0,
     lineWidth: 1,
     style: 'glow',
+    tool: 'ink',
   },
   {
     id: 'pulse',
@@ -50,6 +55,7 @@ export const PENS: Pen[] = [
     octaveShift: 0,
     lineWidth: 0.8,
     style: 'crisp',
+    tool: 'firework',
   },
   {
     id: 'velvet',
@@ -66,6 +72,7 @@ export const PENS: Pen[] = [
     octaveShift: -1,
     lineWidth: 1.6,
     style: 'soft',
+    tool: 'ink',
   },
   {
     id: 'ember',
@@ -82,6 +89,7 @@ export const PENS: Pen[] = [
     octaveShift: -1,
     lineWidth: 1.2,
     style: 'flicker',
+    tool: 'chalk',
   },
   {
     id: 'crystal',
@@ -98,6 +106,7 @@ export const PENS: Pen[] = [
     octaveShift: 1,
     lineWidth: 0.7,
     style: 'sparkle',
+    tool: 'rain',
   },
 ]
 

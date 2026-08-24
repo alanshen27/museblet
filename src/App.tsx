@@ -49,13 +49,15 @@ export default function App() {
   const barMs = () => (60000 / tempoRef.current) * 2
 
   const onDrawPoint = useCallback(
-    (p: { x: number; y: number; pressure: number }) => {
+    (p: { x: number; y: number; pressure: number; speed: number }) => {
       const now = performance.now()
       lastDrawRef.current = now
       const live = liveRef.current
-      // quantize triggers to an eighth-note grid (min a full eighth apart)
-      const eighth = barMs() / 4
-      if (now - live.t < eighth) return
+      // note density follows the hand's energy: fast sweeps play dense
+      // sixteenth runs, slow drags leave long spacious notes
+      const energy = Math.min(1, p.speed * 1.1)
+      const gap = (barMs() / 8) * (4 - energy * 3.2) // half-bar .. sixteenth
+      if (now - live.t < gap) return
       // rest roughly every third slot: phrases need air
       live.step++
       if (live.step % 3 === 2) {
@@ -74,11 +76,13 @@ export default function App() {
         while (midi - live.midi > 7) midi -= 12
         while (live.midi - midi > 7) midi += 12
       }
-      if (midi === live.midi && now - live.t < eighth * 2) return
+      if (midi === live.midi && now - live.t < gap * 2) return
       live.midi = midi
       live.t = now
-      const velocity = Math.round(24 + p.pressure * 46)
-      emit({ timeMs: 0, pen: penId, midi, velocity, durationMs: 520 })
+      // faster gestures strike harder and shorter; slow ones ring out
+      const velocity = Math.round(24 + p.pressure * 30 + energy * 30)
+      const durationMs = 260 + (1 - energy) * 520
+      emit({ timeMs: 0, pen: penId, midi, velocity, durationMs })
     },
     [penId, emit],
   )
