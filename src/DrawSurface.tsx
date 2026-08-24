@@ -443,6 +443,32 @@ export default function DrawSurface({
       g.fillRect(0, 0, w, h)
       g.restore()
     }
+    // wavy currents: soft undulating lines of light flowing through the
+    // room, layered beneath the dot field
+    for (let i = 0; i < 6; i++) {
+      const baseY = h * ((i + 0.5) / 6 + 0.04 * Math.sin(t0 * 0.06 + i * 2.1))
+      const amp = h * (0.04 + 0.03 * Math.sin(i * 1.4 + t0 * 0.045))
+      const speed = 0.07 + (i % 3) * 0.04
+      const grad = g.createLinearGradient(0, 0, w, 0)
+      const col = i % 2 === 0 ? '#5a6f8a' : '#4a5e78'
+      grad.addColorStop(0, `${col}00`)
+      grad.addColorStop(0.5, col)
+      grad.addColorStop(1, `${col}00`)
+      g.globalAlpha = 0.045 + 0.02 * Math.sin(t0 * 0.17 + i)
+      g.strokeStyle = grad
+      g.lineWidth = h * 0.025
+      g.lineCap = 'round'
+      g.beginPath()
+      for (let x = 0; x <= w; x += 16) {
+        const y =
+          baseY +
+          amp * Math.sin((x / w) * Math.PI * 2.2 + t0 * speed * Math.PI * 2 + i * 1.9) +
+          amp * 0.5 * Math.sin((x / w) * Math.PI * 5.5 - t0 * speed * 2.6 + i)
+        if (x === 0) g.moveTo(x, y)
+        else g.lineTo(x, y)
+      }
+      g.stroke()
+    }
     // interactive dot field: a grid of faint dots that scatter away from
     // your cursor/fingertips as you move, and drift on a slowly wandering
     // noise map when left alone
@@ -726,7 +752,7 @@ export default function DrawSurface({
             maxX = Math.max(maxX, p.x * w)
             maxY = Math.max(maxY, p.y * h)
           }
-          g.globalAlpha = alpha * 0.5
+          g.globalAlpha = alpha * 0.9
           const T = 512
           for (let tx = minX - 80; tx < maxX + 80; tx += T) {
             for (let ty = minY - 80; ty < maxY + 80; ty += T) {
