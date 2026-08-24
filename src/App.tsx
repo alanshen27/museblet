@@ -50,6 +50,9 @@ export default function App() {
   const tempoRef = useRef(tempo)
   tempoRef.current = tempo
   const barMs = () => (60000 / tempoRef.current) * 2
+  // harmony breathes slowly: each chord holds for two bars so the room
+  // never feels like it's chasing changes
+  const chordIndex = (now: number) => Math.floor(now / (barMs() * 2))
 
   const onDrawPoint = useCallback(
     (
@@ -65,7 +68,7 @@ export default function App() {
       // finger that glides between chord tones — the melody is a line,
       // not fragments. Max mode keeps the discrete note protocol below.
       if (!inMax) {
-        const chordNow = chordAt(scaleRef.current, Math.floor(now / barMs()))
+        const chordNow = chordAt(scaleRef.current, chordIndex(now))
         const glideMidi = snapToChord(
           Math.round(48 + (1 - p.y) * 30),
           chordNow,
@@ -80,12 +83,12 @@ export default function App() {
       // note density follows the hand's energy: fast sweeps play dense
       // sixteenth runs, slow drags leave long spacious notes
       const energy = energyNow
-      const gap = (barMs() / 8) * (3 - energy * 2.5) // 3/8-bar .. sixteenth
+      const gap = (barMs() / 8) * (3.5 - energy * 2.8) // spacious .. sixteenth
       if (now - live.t < gap) return
       live.step++
-      const chord = chordAt(scaleRef.current, Math.floor(now / barMs()))
-      // melodic cell over chord tones: root -> third -> fifth -> third
-      const cell = [0, 1, 2, 1]
+      const chord = chordAt(scaleRef.current, chordIndex(now))
+      // lyrical cell over chord tones: rises, breathes, resolves
+      const cell = [0, 2, 1, 3, 2, 1]
       const tone = chord[cell[live.step % cell.length] % chord.length]
       // y picks the register (two octaves of range), never the raw pitch
       const register = Math.round((1 - p.y) * 2)
@@ -136,11 +139,12 @@ export default function App() {
       const now = performance.now()
       const active = playing || now - lastDrawRef.current < 5000
       if (!active) return
-      const bar = Math.floor(now / barMs())
+      const bar = chordIndex(now)
       if (bar === lastBar) return
       lastBar = bar
       const chord = chordAt(scaleRef.current, bar)
-      const dur = barMs() * 1.4
+      // pads overlap into the next change so the bed never gaps
+      const dur = barMs() * 2 * 1.3
       // open voicing: root + fifth low, colour tone floated an octave up
       emit({ timeMs: 0, pen: 'velvet', midi: chord[0], velocity: 20, durationMs: dur })
       emit({ timeMs: 0, pen: 'velvet', midi: chord[2], velocity: 18, durationMs: dur })
@@ -151,11 +155,19 @@ export default function App() {
         velocity: 14,
         durationMs: dur,
       })
+      // the 7th floats highest and quietest: colour, not clutter
+      emit({
+        timeMs: 0,
+        pen: 'velvet',
+        midi: chord[3] + 12,
+        velocity: 10,
+        durationMs: dur,
+      })
       emit({
         timeMs: 0,
         pen: 'velvet',
         midi: chord[0] - 24,
-        velocity: 30,
+        velocity: 26,
         durationMs: dur,
       })
     }, 120)

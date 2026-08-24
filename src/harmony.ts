@@ -18,8 +18,8 @@ export function chordAt(
     const idx = deg + i
     return lowMidi + Math.floor(idx / n) * 12 + scale[idx % n]
   }
-  // stacked thirds (every other scale step)
-  return [tone(0), tone(2), tone(4)]
+  // stacked thirds with a soft 7th on top (every other scale step)
+  return [tone(0), tone(2), tone(4), tone(6)]
 }
 
 /** Snap a midi note to the nearest chord tone (any octave). */
