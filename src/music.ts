@@ -7,6 +7,7 @@ export interface Point {
 export interface Stroke {
   points: Point[]
   pen: string
+  bornAt: number
 }
 
 export interface NoteEvent {
