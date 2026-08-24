@@ -7,7 +7,12 @@ interface Props {
   onStrokesChange: (strokes: Stroke[]) => void
   playheadX: number | null // 0..1 while playing
   penId: string
-  onDrawPoint?: (p: { x: number; y: number; pressure: number }) => void
+  onDrawPoint?: (p: {
+    x: number
+    y: number
+    pressure: number
+    speed: number // normalized units per second
+  }) => void
 }
 
 interface Particle {
@@ -19,6 +24,17 @@ interface Particle {
   life: number
   decay: number
   color: string
+  kind?: 'spark' | 'chalk' | 'drop'
+}
+
+// a firework dab: a blob that swells, then bursts into sparks
+interface Blob_ {
+  x: number
+  y: number
+  color: string
+  glow: string
+  born: number
+  size: number
 }
 
 interface Ring {
@@ -119,10 +135,21 @@ export default function DrawSurface({
   onDrawPoint,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const drawing = useRef(false)
-  const currentStroke = useRef<Stroke | null>(null)
+  // multi-touch: each active pointer draws (and sings) its own stroke
+  const activeStrokes = useRef(new Map<number, Stroke>())
+  const pointerState = useRef(
+    new Map<
+      number,
+      {
+        last: { x: number; y: number; t: number } | null
+        weight: number
+        speed: number
+      }
+    >(),
+  )
   const particles = useRef<Particle[]>([])
   const rings = useRef<Ring[]>([])
+  const blobs = useRef<Blob_[]>([])
   const dust = useRef<Dust[]>([])
   const strokesRef = useRef(strokes)
   strokesRef.current = strokes
@@ -169,6 +196,40 @@ export default function DrawSurface({
         color,
       })
     }
+  }
+
+  // chalk: a handful of powder thrown at the surface — scatters, then settles
+  const spawnChalk = (x: number, y: number, color: string, amount: number) => {
+    for (let i = 0; i < amount; i++) {
+      const angle = Math.random() * Math.PI * 2
+      const speed = 0.4 + Math.random() * 2.4
+      particles.current.push({
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        size: 0.6 + Math.random() * 2.2,
+        life: 1,
+        decay: 0.003 + Math.random() * 0.004,
+        color,
+        kind: 'chalk',
+      })
+    }
+  }
+
+  // rain: drops falling from the stroke, splashing as they die
+  const spawnDrop = (x: number, y: number, color: string) => {
+    particles.current.push({
+      x: x + (Math.random() - 0.5) * 14,
+      y,
+      vx: (Math.random() - 0.5) * 0.3,
+      vy: 1.2 + Math.random() * 1.6,
+      size: 1 + Math.random() * 1.6,
+      life: 1,
+      decay: 0.006 + Math.random() * 0.006,
+      color,
+      kind: 'drop',
+    })
   }
 
   const redraw = useCallback(() => {
@@ -255,6 +316,35 @@ export default function DrawSurface({
       g.fillRect(cx - reach, cy - reach, reach * 2, reach * 2)
       g.globalAlpha = 1
 
+      // chalk strokes are powdery stipple, not a ribbon
+      if (pen.tool === 'chalk') {
+        const pts = smoothPoints(s.points)
+        g.shadowBlur = 0
+        for (let i = 0; i < pts.length; i++) {
+          const p = pts[i]
+          // deterministic scatter so the powder doesn't shimmer per frame
+          const r1 = Math.sin(i * 12.9898 + s.bornAt) * 43758.5453
+          const r2 = Math.sin(i * 78.233 + s.bornAt) * 12543.123
+          const ox = (r1 - Math.floor(r1) - 0.5) * 26 * p.pressure
+          const oy = (r2 - Math.floor(r2) - 0.5) * 26 * p.pressure
+          const r3 = Math.sin(i * 3.7 + s.bornAt) * 9631.77
+          const size = 0.5 + (r3 - Math.floor(r3)) * 2.4
+          g.globalAlpha = baseAlpha * (0.15 + (r1 - Math.floor(r1)) * 0.5)
+          g.fillStyle = (r2 - Math.floor(r2)) < 0.25 ? '#efe9dd' : pen.color
+          g.beginPath()
+          g.arc(p.x * w + ox, p.y * h + oy, size, 0, Math.PI * 2)
+          g.fill()
+        }
+        g.globalAlpha = 1
+        continue
+      }
+
+      // rain strokes: a thin silver seam in the sky that keeps raining
+      if (pen.tool === 'rain' && age < LINGER_MS && Math.random() < 0.5) {
+        const p = s.points[Math.floor(Math.random() * s.points.length)]
+        spawnDrop(p.x * w, p.y * h, pen.color)
+      }
+
       // variable-width ribbon polygon (perfect-freehand style): offset the
       // centreline by a per-point half-width and fill the closed outline,
       // so the mark reads as one calligraphic brush stroke
@@ -273,13 +363,10 @@ export default function DrawSurface({
         dx /= len
         dy /= len
         const t = i / (n - 1)
-        // sharp tapered tips, calligraphic swell through the body
-        const taper = Math.pow(Math.sin(Math.PI * t), 0.55)
-        const swell = 0.82 + 0.18 * Math.sin(t * Math.PI * 2.3 + s.bornAt)
-        // inky edge: subtle deterministic width roughening
-        const rough = 1 + 0.1 * Math.sin(i * 1.7 + s.bornAt * 0.13)
-        const half =
-          ((5 + p.pressure * 22) * pen.lineWidth * taper * swell * rough) / 2
+        // tapered tips, wide confident body — a guiding gesture, not a scribble
+        const taper = Math.pow(Math.sin(Math.PI * Math.min(1, t * 1.02)), 0.4)
+        const thin = pen.tool === 'rain' ? 0.35 : 1
+        const half = ((12 + p.pressure * 40) * pen.lineWidth * taper * thin) / 2
         left.push(p.x * w - dy * half, p.y * h + dx * half)
         right.push(p.x * w + dy * half, p.y * h - dx * half)
       }
@@ -325,9 +412,9 @@ export default function DrawSurface({
 
       // wet highlight ridge along the centre
       g.shadowBlur = 0
-      g.globalAlpha = alpha * 0.35
+      g.globalAlpha = alpha * 0.22
       g.strokeStyle = 'rgba(255,252,244,0.8)'
-      g.lineWidth = 1.2
+      g.lineWidth = 2
       g.beginPath()
       g.moveTo(x0, y0)
       for (let i = 1; i < n; i++) g.lineTo(pts[i].x * w, pts[i].y * h)
@@ -386,6 +473,33 @@ export default function DrawSurface({
       prevPlayheadRef.current = null
     }
 
+    // firework dabs: blobs swell with light, then burst
+    const aliveBlobs: Blob_[] = []
+    for (const b of blobs.current) {
+      const t = (now - b.born) / 650
+      if (t >= 1) {
+        spawnBurst(b.x, b.y, b.color, true)
+        continue
+      }
+      aliveBlobs.push(b)
+      const r = b.size * (0.5 + t * 1.3)
+      const glow = g.createRadialGradient(b.x, b.y, 0, b.x, b.y, r * 3)
+      glow.addColorStop(0, b.glow)
+      glow.addColorStop(1, 'rgba(0,0,0,0)')
+      g.globalAlpha = 0.5 + t * 0.5
+      g.fillStyle = glow
+      g.fillRect(b.x - r * 3, b.y - r * 3, r * 6, r * 6)
+      g.fillStyle = b.color
+      g.shadowColor = b.glow
+      g.shadowBlur = 18
+      g.beginPath()
+      g.arc(b.x, b.y, r * (1 + 0.08 * Math.sin(now / 40)), 0, Math.PI * 2)
+      g.fill()
+      g.shadowBlur = 0
+    }
+    blobs.current = aliveBlobs
+    g.globalAlpha = 1
+
     // expanding rings
     const aliveRings: Ring[] = []
     for (const r of rings.current) {
@@ -405,17 +519,53 @@ export default function DrawSurface({
     // particles / glitter
     const alive: Particle[] = []
     for (const p of particles.current) {
+      if (p.kind === 'chalk') {
+        // powder decelerates and settles instead of flying off
+        p.vx *= 0.92
+        p.vy = p.vy * 0.92 + 0.015
+      } else if (p.kind === 'drop') {
+        p.vy += 0.06
+      } else {
+        p.vy += 0.008
+      }
       p.x += p.vx
       p.y += p.vy
-      p.vy += 0.008
       p.life -= p.decay
+      if (p.kind === 'drop' && (p.life <= 0 || p.y > h)) {
+        // splash: two tiny short-lived flecks
+        for (const dir of [-1, 1]) {
+          alive.push({
+            x: p.x,
+            y: Math.min(p.y, h - 2),
+            vx: dir * (0.3 + Math.random() * 0.6),
+            vy: -(0.4 + Math.random() * 0.6),
+            size: 0.7 + Math.random(),
+            life: 0.5,
+            decay: 0.04,
+            color: p.color,
+          })
+        }
+        continue
+      }
       if (p.life <= 0) continue
       alive.push(p)
+      if (p.kind === 'drop') {
+        // a falling streak, not a dot
+        g.globalAlpha = p.life * 0.8
+        g.strokeStyle = p.color
+        g.shadowBlur = 0
+        g.lineWidth = p.size * 0.7
+        g.beginPath()
+        g.moveTo(p.x, p.y - p.vy * 5)
+        g.lineTo(p.x, p.y)
+        g.stroke()
+        continue
+      }
       const tw = 0.6 + 0.4 * Math.sin(now / 80 + p.x)
       g.globalAlpha = p.life * tw
       g.fillStyle = p.color
       g.shadowColor = p.color
-      g.shadowBlur = 6
+      g.shadowBlur = p.kind === 'chalk' ? 0 : 6
       g.beginPath()
       g.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2)
       g.fill()
@@ -459,68 +609,94 @@ export default function DrawSurface({
     return () => observer.disconnect()
   }, [])
 
-  const lastMove = useRef<{ x: number; y: number; t: number } | null>(null)
-  const penWeight = useRef(0.5)
-
   const toPoint = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
     const x = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
     const y = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height))
     // real-pen feel: without true pressure, derive weight from speed —
     // slow deliberate movement lays down ink, fast flicks thin out
-    let pressure: number
-    if (e.pressure > 0 && e.pressure !== 0.5) {
-      pressure = e.pressure
-    } else {
-      const now = performance.now()
-      const prev = lastMove.current
-      if (prev) {
-        const dist = Math.hypot(x - prev.x, y - prev.y)
-        const dt = Math.max(1, now - prev.t)
-        const speed = (dist * 1000) / dt // normalized units per second
-        const target = Math.min(1, Math.max(0.12, 1 - speed * 1.6))
-        penWeight.current += (target - penWeight.current) * 0.25
-      }
-      lastMove.current = { x, y, t: now }
-      pressure = penWeight.current
+    const state = pointerState.current.get(e.pointerId) ?? {
+      last: null,
+      weight: 0.5,
+      speed: 0,
     }
-    return { x, y, pressure }
+    const now = performance.now()
+    if (state.last) {
+      const dist = Math.hypot(x - state.last.x, y - state.last.y)
+      const dt = Math.max(1, now - state.last.t)
+      const speed = (dist * 1000) / dt // normalized units per second
+      state.speed += (speed - state.speed) * 0.3
+      const target = Math.min(1, Math.max(0.12, 1 - speed * 1.6))
+      state.weight += (target - state.weight) * 0.25
+    }
+    state.last = { x, y, t: now }
+    pointerState.current.set(e.pointerId, state)
+    const pressure =
+      e.pressure > 0 && e.pressure !== 0.5 ? e.pressure : state.weight
+    return { x, y, pressure, speed: state.speed }
+  }
+
+  const endPointer = (pointerId: number) => {
+    activeStrokes.current.delete(pointerId)
+    pointerState.current.delete(pointerId)
   }
 
   return (
     <canvas
       ref={canvasRef}
       className="draw-surface"
+      style={{ touchAction: 'none' }}
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId)
-        drawing.current = true
-        lastMove.current = null
-        penWeight.current = 0.5
+        pointerState.current.set(e.pointerId, {
+          last: null,
+          weight: 0.5,
+          speed: 0,
+        })
         const p0 = toPoint(e)
-        currentStroke.current = {
+        const pen = getPen(penId)
+        const canvas = canvasRef.current
+        onDrawPoint?.(p0)
+        // firework pen dabs: drop a blob, no stroke
+        if (pen.tool === 'firework' && canvas) {
+          blobs.current.push({
+            x: p0.x * canvas.width,
+            y: p0.y * canvas.height,
+            color: pen.color,
+            glow: pen.glow,
+            born: performance.now(),
+            size: 6 + p0.pressure * 10,
+          })
+          return
+        }
+        const stroke: Stroke = {
           points: [p0],
           pen: penId,
           bornAt: performance.now(),
         }
-        onDrawPoint?.(p0)
-        onStrokesChange([...strokes, currentStroke.current])
+        activeStrokes.current.set(e.pointerId, stroke)
+        onStrokesChange([...strokes, stroke])
       }}
       onPointerMove={(e) => {
-        if (!drawing.current || !currentStroke.current) return
+        const stroke = activeStrokes.current.get(e.pointerId)
+        if (!stroke) return
         const p = toPoint(e)
-        currentStroke.current.points.push(p)
-        currentStroke.current.bornAt = performance.now()
+        stroke.points.push(p)
+        stroke.bornAt = performance.now()
         onDrawPoint?.(p)
         const canvas = canvasRef.current
+        const pen = getPen(penId)
         if (canvas) {
-          spawnTrail(p.x * canvas.width, p.y * canvas.height, getPen(penId).color)
+          if (pen.tool === 'chalk') {
+            spawnChalk(p.x * canvas.width, p.y * canvas.height, pen.color, 4)
+          } else if (pen.tool !== 'rain') {
+            spawnTrail(p.x * canvas.width, p.y * canvas.height, pen.color)
+          }
         }
         onStrokesChange([...strokes])
       }}
-      onPointerUp={() => {
-        drawing.current = false
-        currentStroke.current = null
-      }}
+      onPointerUp={(e) => endPointer(e.pointerId)}
+      onPointerCancel={(e) => endPointer(e.pointerId)}
     />
   )
 }
