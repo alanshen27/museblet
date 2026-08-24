@@ -323,6 +323,7 @@ export default function DrawSurface({
   const fieldDots = useRef<FieldDot[]>([])
   const fieldSize = useRef({ w: 0, h: 0 })
   const hover = useRef<{ x: number; y: number } | null>(null)
+  const frameCount = useRef(0)
   const strokesRef = useRef(strokes)
   strokesRef.current = strokes
   const onStrokesChangeRef = useRef(onStrokesChange)
@@ -622,12 +623,15 @@ export default function DrawSurface({
     g.globalAlpha = 1
 
     // released strokes keep being eaten tail-first until nothing is left,
-    // so lifting the pen lets the comet finish its journey and vanish
+    // so lifting the pen lets the comet finish its journey and vanish —
+    // slowly, so the mark lingers instead of blinking out
+    frameCount.current++
     const activeSet = new Set(activeStrokes.current.values())
-    for (const s of strokesRef.current) {
-      if (!activeSet.has(s) && s.points.length > 0) {
-        s.points.shift()
-        s.points.shift()
+    if (frameCount.current % 4 === 0) {
+      for (const s of strokesRef.current) {
+        if (!activeSet.has(s) && s.points.length > 0) {
+          s.points.shift()
+        }
       }
     }
 
