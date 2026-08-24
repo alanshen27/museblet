@@ -238,6 +238,15 @@ const smoothCache = new WeakMap<
 // ribbon of this many points follows the hand
 const TRAIL_POINTS = 70
 
+// topographic hills: drifting centres, each drawn as concentric contours
+const HILLS = [
+  { x: 0.22, y: 0.3, r: 0.34, rings: 7, driftX: 0.05, driftY: 0.034, phase: 0.7 },
+  { x: 0.74, y: 0.22, r: 0.26, rings: 6, driftX: 0.041, driftY: 0.052, phase: 2.3 },
+  { x: 0.55, y: 0.72, r: 0.4, rings: 8, driftX: 0.033, driftY: 0.045, phase: 4.1 },
+  { x: 0.12, y: 0.82, r: 0.22, rings: 5, driftX: 0.056, driftY: 0.038, phase: 5.5 },
+  { x: 0.9, y: 0.65, r: 0.28, rings: 6, driftX: 0.047, driftY: 0.029, phase: 1.6 },
+]
+
 // aurora curtains: wide muted-colour glows drifting slowly across the dark
 const AURORA = [
   { y: 0.18, r: 0.5, color: '#3d5a52', alpha: 0.1, driftX: 0.05, driftY: 0.03, phase: 0.4 },
@@ -439,8 +448,8 @@ export default function DrawSurface({
     // strokes ride the terrain: the same height map that shapes the
     // topographic waves gently displaces every drawn mark
     const warpPt = (p: Pt): Pt => ({
-      x: p.x + 0.004 * terrainH(p.x, p.y, t0),
-      y: p.y + 0.009 * terrainH(p.y + 0.37, p.x + 0.61, t0),
+      x: p.x + 0.0015 * terrainH(p.x, p.y, t0 * 0.5),
+      y: p.y + 0.0035 * terrainH(p.y + 0.37, p.x + 0.61, t0 * 0.5),
       pressure: p.pressure,
     })
     for (let i = 0; i < AURORA.length; i++) {
@@ -460,32 +469,46 @@ export default function DrawSurface({
       g.fillRect(0, 0, w, h)
       g.restore()
     }
-    // topographic waves: a 3D terrain of contour lines receding into the
-    // dark — far rows sit high and faint, near rows swell larger and
-    // brighter, all riding the same rolling height map that warps strokes
+    // topographic map: little hills drawn as concentric contour rings,
+    // each ring wobbled by the height map so the contours read as terrain,
+    // the hills themselves drifting slowly through the room
     {
-      const ROWS = 22
       g.lineCap = 'round'
-      for (let r = 0; r < ROWS; r++) {
-        const v = r / (ROWS - 1)
-        const persp = 0.3 + 0.7 * v ** 1.4 // perspective: near rows larger
-        const rowY = h * (0.08 + 0.88 * v ** 1.3)
-        const ampl = h * 0.075 * persp
-        const grad = g.createLinearGradient(0, 0, w, 0)
-        const col = r % 2 === 0 ? '#5a6f8a' : '#4a5e78'
-        grad.addColorStop(0, `${col}00`)
-        grad.addColorStop(0.5, col)
-        grad.addColorStop(1, `${col}00`)
-        g.strokeStyle = grad
-        g.globalAlpha = 0.03 + 0.055 * v
-        g.lineWidth = 1 + 1.6 * persp
-        g.beginPath()
-        for (let x = 0; x <= w; x += 14) {
-          const y = rowY - (terrainH(x / w, v * 1.6, t0) * 0.5 + 0.5) * ampl
-          if (x === 0) g.moveTo(x, y)
-          else g.lineTo(x, y)
+      for (let hIdx = 0; hIdx < HILLS.length; hIdx++) {
+        const hill = HILLS[hIdx]
+        const cx = (hill.x + 0.06 * Math.sin(t0 * hill.driftX + hill.phase)) * w
+        const cy = (hill.y + 0.05 * Math.cos(t0 * hill.driftY + hill.phase * 2)) * h
+        const maxR = hill.r * Math.min(w, h)
+        const breathe = 1 + 0.06 * Math.sin(t0 * 0.11 + hill.phase * 3)
+        for (let k = 1; k <= hill.rings; k++) {
+          const v = k / hill.rings
+          const radius = maxR * v * breathe
+          const col = k % 2 === 0 ? '#5a6f8a' : '#4a5e78'
+          g.strokeStyle = col
+          // inner rings (the summit) glow a touch brighter
+          g.globalAlpha = 0.028 + 0.05 * (1 - v)
+          g.lineWidth = 1.2
+          g.beginPath()
+          const STEPS = 72
+          for (let i = 0; i <= STEPS; i++) {
+            const a = (i / STEPS) * Math.PI * 2
+            // organic contours: wobble the radius with the height map
+            const wob =
+              1 +
+              0.14 *
+                terrainH(
+                  Math.cos(a) * 0.6 + hIdx,
+                  Math.sin(a) * 0.6 + k * 0.37,
+                  t0 * 0.6 + hill.phase,
+                )
+            const x = cx + Math.cos(a) * radius * wob
+            const y = cy + Math.sin(a) * radius * wob
+            if (i === 0) g.moveTo(x, y)
+            else g.lineTo(x, y)
+          }
+          g.closePath()
+          g.stroke()
         }
-        g.stroke()
       }
     }
     // interactive dot field: a grid of faint dots that scatter away from
