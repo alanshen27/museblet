@@ -44,6 +44,10 @@ const STEP_RAD = Math.PI / 14
 const PINCH_FRAMES = 3
 const FIST_FRAMES = 6
 
+// fraction of the camera frame cropped off each edge — the remaining
+// centre maps to the whole canvas (an effectively wider reach)
+const CAM_MARGIN = 0.18
+
 // camera footage is shaky: exponentially smooth each fingertip before it
 // ever reaches the stroke, on top of the surface's own relax/curve passes
 const SMOOTH = 0.35
@@ -106,9 +110,14 @@ export default function HandLayer({ surface }: Props) {
         const mcp = lm[MIDDLE_MCP]
         const palm = Math.hypot(wrist.x - mcp.x, wrist.y - mcp.y)
 
-        // selfie view: mirror x so moving right moves the dot right
-        const rawX = Math.min(1, Math.max(0, 1 - tip.x))
-        const rawY = Math.min(1, Math.max(0, tip.y))
+        // selfie view: mirror x so moving right moves the dot right.
+        // wide-angle mapping: the central region of the camera frame maps
+        // to the full canvas, so the whole surface is reachable without
+        // stretching your hand to the frame edges
+        const zoom = (v: number) =>
+          Math.min(1, Math.max(0, (v - CAM_MARGIN) / (1 - 2 * CAM_MARGIN)))
+        const rawX = zoom(1 - tip.x)
+        const rawY = zoom(tip.y)
         const pinchDist =
           Math.hypot(tip.x - thumb.x, tip.y - thumb.y) / (palm || 1)
 
@@ -184,8 +193,8 @@ export default function HandLayer({ surface }: Props) {
           state.menuSel =
             (((state.pen + steps) % PENS.length) + PENS.length) % PENS.length
           menus.push({
-            x: Math.min(1, Math.max(0, 1 - mcp.x)),
-            y: Math.min(1, Math.max(0, mcp.y)),
+            x: zoom(1 - mcp.x),
+            y: zoom(mcp.y),
             selected: state.menuSel,
           })
           hands.set(hand, state)
@@ -233,8 +242,8 @@ export default function HandLayer({ surface }: Props) {
         })
         // the thumb is the activation point: show it as an anchor
         cursors.push({
-          x: Math.min(1, Math.max(0, 1 - thumb.x)),
-          y: Math.min(1, Math.max(0, thumb.y)),
+          x: zoom(1 - thumb.x),
+          y: zoom(thumb.y),
           color: '#e8e3d8',
           active: false,
           kind: 'thumb',
