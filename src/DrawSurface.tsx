@@ -39,10 +39,10 @@ interface Dust {
 }
 
 // strokes settle, linger as ghosts, then dissolve to make way for new marks
-const SETTLE_MS = 6000
+const SETTLE_MS = 5000
 const GHOST_ALPHA = 0.4
-const LINGER_MS = 30000
-const DISSOLVE_MS = 12000
+const LINGER_MS = 12000
+const DISSOLVE_MS = 6000
 
 interface Pt {
   x: number
@@ -255,68 +255,83 @@ export default function DrawSurface({
       g.fillRect(cx - reach, cy - reach, reach * 2, reach * 2)
       g.globalAlpha = 1
 
+      // variable-width ribbon polygon (perfect-freehand style): offset the
+      // centreline by a per-point half-width and fill the closed outline,
+      // so the mark reads as one calligraphic brush stroke
       const pts = smoothPoints(s.points)
-      for (let i = 1; i < pts.length; i++) {
-        const a = pts[i - 1]
-        const b = pts[i]
-        // taper toward the ends for a brush feel
-        const t = i / pts.length
-        const taper = Math.sin(Math.PI * Math.min(1, t * 1.05))
-        // organic swell: width breathes along the curve like a brush lifting
-        const swell = 0.75 + 0.25 * Math.sin(t * Math.PI * 3 + s.bornAt)
-        const width =
-          (6 + b.pressure * 26) * pen.lineWidth * (0.25 + taper * 0.75) * swell
-        // near the playhead, the stroke gently brightens
-        const nearBeam =
-          px !== null ? Math.max(0, 1 - Math.abs(b.x - px) * 18) : 0
-        const alpha = Math.min(1, baseAlpha + nearBeam * 0.7) * flicker
-
-        // gradient along the stroke: head colour easing into tail colour
-        const grad = g.createLinearGradient(a.x * w, a.y * h, b.x * w, b.y * h)
-        const mixT = t
-        grad.addColorStop(0, mixT < 0.5 ? pen.color : pen.colorB)
-        grad.addColorStop(1, mixT < 0.5 ? pen.colorB : pen.color)
-
-        // soft halo
-        g.globalAlpha = alpha * 0.14
-        g.strokeStyle = pen.color
-        g.shadowColor = pen.glow
-        g.shadowBlur = pen.style === 'soft' ? 26 : 14
-        g.lineWidth = width * 1.9
-        g.beginPath()
-        g.moveTo(a.x * w, a.y * h)
-        g.lineTo(b.x * w, b.y * h)
-        g.stroke()
-
-        // painterly body: layered bristle ribbons offset across the path
-        const dx = b.x * w - a.x * w
-        const dy = b.y * h - a.y * h
+      if (pts.length < 2) continue
+      const n = pts.length
+      const left: number[] = []
+      const right: number[] = []
+      for (let i = 0; i < n; i++) {
+        const p = pts[i]
+        const prev = pts[Math.max(0, i - 1)]
+        const next = pts[Math.min(n - 1, i + 1)]
+        let dx = (next.x - prev.x) * w
+        let dy = (next.y - prev.y) * h
         const len = Math.hypot(dx, dy) || 1
-        const nx = -dy / len
-        const ny = dx / len
-        g.shadowBlur = pen.style === 'crisp' ? 2 : 6
-        for (let bi = 0; bi < 4; bi++) {
-          const off = (bi / 3 - 0.5) * width * 0.7
-          const wob = Math.sin(t * Math.PI * 5 + bi * 2.1 + s.bornAt) * width * 0.12
-          const o = off + wob
-          g.globalAlpha = alpha * (bi === 1 || bi === 2 ? 0.55 : 0.3)
-          g.strokeStyle = grad
-          g.lineWidth = width * (0.55 - Math.abs(bi / 3 - 0.5) * 0.35)
-          g.beginPath()
-          g.moveTo(a.x * w + nx * o, a.y * h + ny * o)
-          g.lineTo(b.x * w + nx * o, b.y * h + ny * o)
-          g.stroke()
-        }
-
-        // bright wet centre
-        g.globalAlpha = alpha * 0.85
-        g.strokeStyle = grad
-        g.lineWidth = width * 0.45
-        g.beginPath()
-        g.moveTo(a.x * w, a.y * h)
-        g.lineTo(b.x * w, b.y * h)
-        g.stroke()
+        dx /= len
+        dy /= len
+        const t = i / (n - 1)
+        // sharp tapered tips, calligraphic swell through the body
+        const taper = Math.pow(Math.sin(Math.PI * t), 0.55)
+        const swell = 0.82 + 0.18 * Math.sin(t * Math.PI * 2.3 + s.bornAt)
+        // inky edge: subtle deterministic width roughening
+        const rough = 1 + 0.1 * Math.sin(i * 1.7 + s.bornAt * 0.13)
+        const half =
+          ((5 + p.pressure * 22) * pen.lineWidth * taper * swell * rough) / 2
+        left.push(p.x * w - dy * half, p.y * h + dx * half)
+        right.push(p.x * w + dy * half, p.y * h - dx * half)
       }
+
+      const trace = () => {
+        g.beginPath()
+        g.moveTo(left[0], left[1])
+        for (let i = 1; i < n; i++) g.lineTo(left[i * 2], left[i * 2 + 1])
+        for (let i = n - 1; i >= 0; i--) g.lineTo(right[i * 2], right[i * 2 + 1])
+        g.closePath()
+      }
+
+      const x0 = pts[0].x * w
+      const y0 = pts[0].y * h
+      const x1 = pts[n - 1].x * w
+      const y1 = pts[n - 1].y * h
+      const grad = g.createLinearGradient(x0, y0, x1, y1)
+      grad.addColorStop(0, pen.color)
+      grad.addColorStop(1, pen.colorB)
+
+      const nearBeam =
+        px !== null
+          ? Math.max(
+              0,
+              1 - Math.abs((pts[Math.floor(n / 2)]?.x ?? 0) - px) * 10,
+            )
+          : 0
+      const alpha = Math.min(1, baseAlpha + nearBeam * 0.5) * flicker
+
+      // soft glow beneath the body
+      g.shadowColor = pen.glow
+      g.shadowBlur = pen.style === 'soft' ? 30 : 18
+      g.globalAlpha = alpha * 0.45
+      g.fillStyle = grad
+      trace()
+      g.fill()
+
+      // solid body
+      g.shadowBlur = pen.style === 'crisp' ? 2 : 8
+      g.globalAlpha = alpha * 0.9
+      trace()
+      g.fill()
+
+      // wet highlight ridge along the centre
+      g.shadowBlur = 0
+      g.globalAlpha = alpha * 0.35
+      g.strokeStyle = 'rgba(255,252,244,0.8)'
+      g.lineWidth = 1.2
+      g.beginPath()
+      g.moveTo(x0, y0)
+      for (let i = 1; i < n; i++) g.lineTo(pts[i].x * w, pts[i].y * h)
+      g.stroke()
 
       if (pen.style === 'sparkle') {
         g.shadowBlur = 0
