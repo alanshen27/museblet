@@ -90,7 +90,7 @@ function softMote(
 }
 
 // moving-average pass: irons out hand jitter before curve fitting
-function relaxPoints(pts: Pt[], passes = 2): Pt[] {
+function relaxPoints(pts: Pt[], passes = 4): Pt[] {
   let cur = pts
   for (let p = 0; p < passes; p++) {
     if (cur.length < 5) break
@@ -395,7 +395,7 @@ export default function DrawSurface({
         // tapered tips, wide confident body — a guiding gesture, not a scribble
         const taper = Math.pow(Math.sin(Math.PI * Math.min(1, t * 1.02)), 0.4)
         const thin = pen.tool === 'rain' ? 0.35 : 1
-        const half = ((12 + p.pressure * 40) * pen.lineWidth * taper * thin) / 2
+        const half = ((18 + p.pressure * 52) * pen.lineWidth * taper * thin) / 2
         left.push(p.x * w - dy * half, p.y * h + dx * half)
         right.push(p.x * w + dy * half, p.y * h - dx * half)
       }
