@@ -103,8 +103,22 @@ export default function DrawSurface({
 
     g.clearRect(0, 0, w, h)
 
-    // faint grid
-    g.strokeStyle = 'rgba(255,255,255,0.035)'
+    // heavy room: vignette pressing in from the edges
+    const vignette = g.createRadialGradient(
+      w / 2,
+      h / 2,
+      Math.min(w, h) * 0.25,
+      w / 2,
+      h / 2,
+      Math.max(w, h) * 0.75,
+    )
+    vignette.addColorStop(0, 'rgba(0,0,0,0)')
+    vignette.addColorStop(1, 'rgba(0,0,0,0.55)')
+    g.fillStyle = vignette
+    g.fillRect(0, 0, w, h)
+
+    // barely-there grid
+    g.strokeStyle = 'rgba(255,255,255,0.018)'
     g.lineWidth = 1
     for (let i = 1; i < 8; i++) {
       g.beginPath()
@@ -136,15 +150,15 @@ export default function DrawSurface({
       d.x = (d.x + d.vx + w) % w
       d.y = (d.y + d.vy + h) % h
       const tw = 0.5 + 0.5 * Math.sin(now / 700 + d.phase)
-      g.globalAlpha = 0.05 + tw * 0.22
-      g.fillStyle = '#dfe9ff'
+      g.globalAlpha = 0.02 + tw * 0.1
+      g.fillStyle = '#e8e3d8'
       g.beginPath()
       g.arc(d.x, d.y, d.size * (0.6 + tw * 0.6), 0, Math.PI * 2)
       g.fill()
     }
     g.globalAlpha = 1
 
-    // strokes: bright when fresh, settling into a subtle ghost
+    // strokes: gradient ribbons of light that lift the dark room
     g.lineCap = 'round'
     g.lineJoin = 'round'
     const px = playheadRef.current
@@ -155,7 +169,24 @@ export default function DrawSurface({
       const settle = Math.min(1, age / SETTLE_MS)
       const baseAlpha = 1 - settle * (1 - GHOST_ALPHA)
       const flicker =
-        pen.style === 'flicker' ? 0.8 + 0.2 * Math.sin(now / 90) : 1
+        pen.style === 'flicker' ? 0.85 + 0.15 * Math.sin(now / 130) : 1
+
+      // pool of light the stroke casts into the room
+      const first = s.points[0]
+      const last = s.points[s.points.length - 1]
+      const cx = ((first.x + last.x) / 2) * w
+      const cy = ((first.y + last.y) / 2) * h
+      const reach = Math.max(
+        60,
+        Math.hypot((last.x - first.x) * w, (last.y - first.y) * h),
+      )
+      const pool = g.createRadialGradient(cx, cy, 0, cx, cy, reach)
+      pool.addColorStop(0, pen.glow)
+      pool.addColorStop(1, 'rgba(0,0,0,0)')
+      g.globalAlpha = 0.1 * baseAlpha
+      g.fillStyle = pool
+      g.fillRect(cx - reach, cy - reach, reach * 2, reach * 2)
+      g.globalAlpha = 1
 
       for (let i = 1; i < s.points.length; i++) {
         const a = s.points[i - 1]
@@ -164,25 +195,32 @@ export default function DrawSurface({
         const t = i / s.points.length
         const taper = Math.sin(Math.PI * Math.min(1, t * 1.05))
         const width = (1.5 + b.pressure * 9) * pen.lineWidth * (0.35 + taper * 0.65)
-        // near the playhead, the stroke flares back to life
+        // near the playhead, the stroke gently brightens
         const nearBeam =
           px !== null ? Math.max(0, 1 - Math.abs(b.x - px) * 18) : 0
-        const alpha = Math.min(1, baseAlpha + nearBeam * 0.9) * flicker
+        const alpha = Math.min(1, baseAlpha + nearBeam * 0.7) * flicker
 
-        // soft underlay
-        g.globalAlpha = alpha * 0.25
+        // gradient along the stroke: head colour easing into tail colour
+        const grad = g.createLinearGradient(a.x * w, a.y * h, b.x * w, b.y * h)
+        const mixT = t
+        grad.addColorStop(0, mixT < 0.5 ? pen.color : pen.colorB)
+        grad.addColorStop(1, mixT < 0.5 ? pen.colorB : pen.color)
+
+        // soft halo
+        g.globalAlpha = alpha * 0.18
         g.strokeStyle = pen.color
         g.shadowColor = pen.glow
-        g.shadowBlur = pen.style === 'soft' ? 30 : 20
-        g.lineWidth = width * 2.4
+        g.shadowBlur = pen.style === 'soft' ? 26 : 14
+        g.lineWidth = width * 2.6
         g.beginPath()
         g.moveTo(a.x * w, a.y * h)
         g.lineTo(b.x * w, b.y * h)
         g.stroke()
 
-        // bright core
-        g.globalAlpha = alpha
-        g.shadowBlur = pen.style === 'crisp' ? 4 : 10
+        // gradient core
+        g.globalAlpha = alpha * 0.9
+        g.strokeStyle = grad
+        g.shadowBlur = pen.style === 'crisp' ? 2 : 7
         g.lineWidth = width
         g.beginPath()
         g.moveTo(a.x * w, a.y * h)
@@ -226,13 +264,13 @@ export default function DrawSurface({
       // beam
       const x = px * w
       const beam = g.createLinearGradient(x - 36, 0, x + 2, 0)
-      beam.addColorStop(0, 'rgba(255,209,102,0)')
-      beam.addColorStop(1, 'rgba(255,209,102,0.14)')
+      beam.addColorStop(0, 'rgba(232,227,216,0)')
+      beam.addColorStop(1, 'rgba(232,227,216,0.08)')
       g.fillStyle = beam
       g.fillRect(x - 36, 0, 38, h)
-      g.strokeStyle = 'rgba(255,209,102,0.9)'
-      g.shadowColor = 'rgba(255,209,102,0.9)'
-      g.shadowBlur = 14
+      g.strokeStyle = 'rgba(232,227,216,0.55)'
+      g.shadowColor = 'rgba(232,227,216,0.5)'
+      g.shadowBlur = 10
       g.lineWidth = 1.5
       g.beginPath()
       g.moveTo(x, 0)

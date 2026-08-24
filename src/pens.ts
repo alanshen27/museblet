@@ -4,6 +4,7 @@ export interface Pen {
   id: PenId
   name: string
   color: string
+  colorB: string
   glow: string
   /** oscillator recipe for the standalone Web Audio synth */
   wave: OscillatorType
@@ -20,9 +21,10 @@ export interface Pen {
 export const PENS: Pen[] = [
   {
     id: 'neon',
-    name: 'Neon',
-    color: '#4cc9f0',
-    glow: 'rgba(76,201,240,0.85)',
+    name: 'Aurum',
+    color: '#e8c47a',
+    colorB: '#9a6a2f',
+    glow: 'rgba(232,196,122,0.5)',
     wave: 'sawtooth',
     detune: 8,
     filterBase: 600,
@@ -35,9 +37,10 @@ export const PENS: Pen[] = [
   },
   {
     id: 'pulse',
-    name: 'Pulse',
-    color: '#f72585',
-    glow: 'rgba(247,37,133,0.85)',
+    name: 'Rose',
+    color: '#c98a94',
+    colorB: '#6d3243',
+    glow: 'rgba(201,138,148,0.45)',
     wave: 'square',
     detune: 0,
     filterBase: 900,
@@ -50,9 +53,10 @@ export const PENS: Pen[] = [
   },
   {
     id: 'velvet',
-    name: 'Velvet',
-    color: '#c77dff',
-    glow: 'rgba(199,125,255,0.7)',
+    name: 'Iris',
+    color: '#9d94c9',
+    colorB: '#3d3a66',
+    glow: 'rgba(157,148,201,0.4)',
     wave: 'sine',
     detune: 5,
     filterBase: 400,
@@ -65,9 +69,10 @@ export const PENS: Pen[] = [
   },
   {
     id: 'ember',
-    name: 'Ember',
-    color: '#ff7b00',
-    glow: 'rgba(255,123,0,0.8)',
+    name: 'Umber',
+    color: '#c97b4a',
+    colorB: '#5e3220',
+    glow: 'rgba(201,123,74,0.45)',
     wave: 'triangle',
     detune: 15,
     filterBase: 300,
@@ -80,9 +85,10 @@ export const PENS: Pen[] = [
   },
   {
     id: 'crystal',
-    name: 'Crystal',
-    color: '#e0fbfc',
-    glow: 'rgba(224,251,252,0.9)',
+    name: 'Pearl',
+    color: '#e9e6da',
+    colorB: '#9fa8b5',
+    glow: 'rgba(233,230,218,0.5)',
     wave: 'sine',
     detune: 2,
     filterBase: 2000,
