@@ -119,8 +119,11 @@ export default function DrawSurface({
   onDrawPoint,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const drawing = useRef(false)
-  const currentStroke = useRef<Stroke | null>(null)
+  // multi-touch: each active pointer draws (and sings) its own stroke
+  const activeStrokes = useRef(new Map<number, Stroke>())
+  const pointerState = useRef(
+    new Map<number, { last: { x: number; y: number; t: number } | null; weight: number }>(),
+  )
   const particles = useRef<Particle[]>([])
   const rings = useRef<Ring[]>([])
   const dust = useRef<Dust[]>([])
@@ -273,13 +276,9 @@ export default function DrawSurface({
         dx /= len
         dy /= len
         const t = i / (n - 1)
-        // sharp tapered tips, calligraphic swell through the body
-        const taper = Math.pow(Math.sin(Math.PI * t), 0.55)
-        const swell = 0.82 + 0.18 * Math.sin(t * Math.PI * 2.3 + s.bornAt)
-        // inky edge: subtle deterministic width roughening
-        const rough = 1 + 0.1 * Math.sin(i * 1.7 + s.bornAt * 0.13)
-        const half =
-          ((5 + p.pressure * 22) * pen.lineWidth * taper * swell * rough) / 2
+        // tapered tips, wide confident body — a guiding gesture, not a scribble
+        const taper = Math.pow(Math.sin(Math.PI * Math.min(1, t * 1.02)), 0.4)
+        const half = ((12 + p.pressure * 40) * pen.lineWidth * taper) / 2
         left.push(p.x * w - dy * half, p.y * h + dx * half)
         right.push(p.x * w + dy * half, p.y * h - dx * half)
       }
@@ -325,9 +324,9 @@ export default function DrawSurface({
 
       // wet highlight ridge along the centre
       g.shadowBlur = 0
-      g.globalAlpha = alpha * 0.35
+      g.globalAlpha = alpha * 0.22
       g.strokeStyle = 'rgba(255,252,244,0.8)'
-      g.lineWidth = 1.2
+      g.lineWidth = 2
       g.beginPath()
       g.moveTo(x0, y0)
       for (let i = 1; i < n; i++) g.lineTo(pts[i].x * w, pts[i].y * h)
@@ -459,9 +458,6 @@ export default function DrawSurface({
     return () => observer.disconnect()
   }, [])
 
-  const lastMove = useRef<{ x: number; y: number; t: number } | null>(null)
-  const penWeight = useRef(0.5)
-
   const toPoint = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
     const x = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
@@ -472,44 +468,54 @@ export default function DrawSurface({
     if (e.pressure > 0 && e.pressure !== 0.5) {
       pressure = e.pressure
     } else {
+      const state = pointerState.current.get(e.pointerId) ?? {
+        last: null,
+        weight: 0.5,
+      }
       const now = performance.now()
-      const prev = lastMove.current
-      if (prev) {
-        const dist = Math.hypot(x - prev.x, y - prev.y)
-        const dt = Math.max(1, now - prev.t)
+      if (state.last) {
+        const dist = Math.hypot(x - state.last.x, y - state.last.y)
+        const dt = Math.max(1, now - state.last.t)
         const speed = (dist * 1000) / dt // normalized units per second
         const target = Math.min(1, Math.max(0.12, 1 - speed * 1.6))
-        penWeight.current += (target - penWeight.current) * 0.25
+        state.weight += (target - state.weight) * 0.25
       }
-      lastMove.current = { x, y, t: now }
-      pressure = penWeight.current
+      state.last = { x, y, t: now }
+      pointerState.current.set(e.pointerId, state)
+      pressure = state.weight
     }
     return { x, y, pressure }
+  }
+
+  const endPointer = (pointerId: number) => {
+    activeStrokes.current.delete(pointerId)
+    pointerState.current.delete(pointerId)
   }
 
   return (
     <canvas
       ref={canvasRef}
       className="draw-surface"
+      style={{ touchAction: 'none' }}
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId)
-        drawing.current = true
-        lastMove.current = null
-        penWeight.current = 0.5
+        pointerState.current.set(e.pointerId, { last: null, weight: 0.5 })
         const p0 = toPoint(e)
-        currentStroke.current = {
+        const stroke: Stroke = {
           points: [p0],
           pen: penId,
           bornAt: performance.now(),
         }
+        activeStrokes.current.set(e.pointerId, stroke)
         onDrawPoint?.(p0)
-        onStrokesChange([...strokes, currentStroke.current])
+        onStrokesChange([...strokes, stroke])
       }}
       onPointerMove={(e) => {
-        if (!drawing.current || !currentStroke.current) return
+        const stroke = activeStrokes.current.get(e.pointerId)
+        if (!stroke) return
         const p = toPoint(e)
-        currentStroke.current.points.push(p)
-        currentStroke.current.bornAt = performance.now()
+        stroke.points.push(p)
+        stroke.bornAt = performance.now()
         onDrawPoint?.(p)
         const canvas = canvasRef.current
         if (canvas) {
@@ -517,10 +523,8 @@ export default function DrawSurface({
         }
         onStrokesChange([...strokes])
       }}
-      onPointerUp={() => {
-        drawing.current = false
-        currentStroke.current = null
-      }}
+      onPointerUp={(e) => endPointer(e.pointerId)}
+      onPointerCancel={(e) => endPointer(e.pointerId)}
     />
   )
 }
