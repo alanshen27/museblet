@@ -142,6 +142,62 @@ export function glideStop(pointerId: number) {
   v.osc2.stop(now + 3)
 }
 
+// firework detonation: a sub thump + filtered noise whoosh + bell shimmer
+export function playExplosion(intensity = 1) {
+  const ac = getContext()
+  const now = ac.currentTime
+
+  // sub boom
+  const boom = ac.createOscillator()
+  boom.type = 'sine'
+  boom.frequency.setValueAtTime(120, now)
+  boom.frequency.exponentialRampToValueAtTime(38, now + 0.5)
+  const boomGain = ac.createGain()
+  boomGain.gain.setValueAtTime(0.5 * intensity, now)
+  boomGain.gain.exponentialRampToValueAtTime(0.001, now + 0.8)
+  boom.connect(boomGain)
+  boomGain.connect(master!)
+  boom.start(now)
+  boom.stop(now + 1)
+
+  // noise whoosh through a falling lowpass
+  const len = Math.floor(ac.sampleRate * 1.2)
+  const buf = ac.createBuffer(1, len, ac.sampleRate)
+  const data = buf.getChannelData(0)
+  for (let i = 0; i < len; i++) {
+    data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2)
+  }
+  const noise = ac.createBufferSource()
+  noise.buffer = buf
+  const lp = ac.createBiquadFilter()
+  lp.type = 'lowpass'
+  lp.frequency.setValueAtTime(4000, now)
+  lp.frequency.exponentialRampToValueAtTime(200, now + 1)
+  const noiseGain = ac.createGain()
+  noiseGain.gain.setValueAtTime(0.35 * intensity, now)
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 1.1)
+  noise.connect(lp)
+  lp.connect(noiseGain)
+  noiseGain.connect(master!)
+  noiseGain.connect(reverb!)
+  noise.start(now)
+
+  // glittering shimmer: a scatter of tiny high pings raining after the burst
+  for (let i = 0; i < 6; i++) {
+    const t = now + 0.05 + Math.random() * 0.5
+    const ping = ac.createOscillator()
+    ping.type = 'sine'
+    ping.frequency.value = 1400 + Math.random() * 2400
+    const pGain = ac.createGain()
+    pGain.gain.setValueAtTime(0.06 * intensity, t)
+    pGain.gain.exponentialRampToValueAtTime(0.001, t + 0.6)
+    ping.connect(pGain)
+    pGain.connect(reverb!)
+    ping.start(t)
+    ping.stop(t + 0.7)
+  }
+}
+
 export function playNote(
   penId: string,
   midi: number,

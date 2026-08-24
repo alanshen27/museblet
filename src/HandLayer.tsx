@@ -29,12 +29,12 @@ const MIDDLE_MCP = 9
 const PINCH_ON = 0.32
 const PINCH_OFF = 0.44
 
-// fist hysteresis: avg fingertip-to-wrist distance vs palm size — when the
-// hand bunches into a fist the fingertips fold in close to the wrist
-const FIST_ON = 1.15
-const FIST_OFF = 1.45
+// open-palm hysteresis: avg fingertip-to-wrist distance vs palm size — a
+// fully spread hand extends the fingertips far past the knuckles
+const PALM_ON = 1.95
+const PALM_OFF = 1.7
 
-// rotating the fist by this much moves the wheel highlight by one pen
+// rotating the palm by this much moves the wheel highlight by one pen
 const STEP_RAD = Math.PI / 5
 
 // camera footage is shaky: exponentially smooth each fingertip before it
@@ -47,9 +47,10 @@ interface HandState {
   speed: number
   sx: number // smoothed index-tip position
   sy: number
+  glitch: number // consecutive frames rejected as tracking glitches
   pen: number // index into PENS
-  fist: boolean
-  menuAngle: number // hand roll angle when the fist closed
+  palm: boolean
+  menuAngle: number // hand roll angle when the palm opened
   menuSel: number
 }
 
@@ -59,9 +60,9 @@ interface Props {
 
 /**
  * Camera hand tracking: MediaPipe finds up to two hands. Pinching index to
- * thumb draws (and plays) with the hand's current pen; bunching a fist
- * summons a radial pen wheel — rotate the fist to spin the highlight and
- * open the hand to select.
+ * thumb draws (and plays) with the hand's current pen; spreading an open
+ * palm summons a radial pen wheel — rotate the palm to spin the highlight
+ * and relax the hand to select.
  */
 export default function HandLayer({ surface }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -108,13 +109,24 @@ export default function HandLayer({ surface }: Props) {
           speed: 0,
           sx: rawX,
           sy: rawY,
+          glitch: 0,
           pen: hand % PENS.length,
-          fist: false,
+          palm: false,
           menuAngle: 0,
           menuSel: 0,
         }
-        state.sx += (rawX - state.sx) * SMOOTH
-        state.sy += (rawY - state.sy) * SMOOTH
+        // webcam glitch guard: when tracking clips out the landmark can
+        // teleport across the frame for a frame or two — ignore impossible
+        // jumps instead of letting the stroke leap with them
+        const jump = Math.hypot(rawX - state.sx, rawY - state.sy)
+        if (jump < 0.25 || state.glitch > 5) {
+          // a sustained "jump" is a real move: snap back onto the hand
+          state.sx += (rawX - state.sx) * SMOOTH
+          state.sy += (rawY - state.sy) * SMOOTH
+          state.glitch = 0
+        } else {
+          state.glitch++
+        }
         const x = state.sx
         const y = state.sy
         const now = performance.now()
@@ -125,8 +137,8 @@ export default function HandLayer({ surface }: Props) {
         }
         state.last = { x, y, t: now }
 
-        // fist detection: fingertips folded in close to the wrist
-        const fold =
+        // open-palm detection: fingertips spread far from the wrist
+        const spread =
           FINGER_TIPS.reduce(
             (sum, i) => sum + Math.hypot(lm[i].x - wrist.x, lm[i].y - wrist.y),
             0,
@@ -136,23 +148,23 @@ export default function HandLayer({ surface }: Props) {
         const roll = Math.atan2(mcp.y - wrist.y, -(mcp.x - wrist.x))
 
         const id = 1000 + hand
-        if (!state.fist && fold < FIST_ON) {
-          // fist closes: summon the wheel, drop any active stroke
-          state.fist = true
+        if (!state.palm && spread > PALM_ON) {
+          // palm spreads open: summon the wheel, drop any active stroke
+          state.palm = true
           state.menuAngle = roll
           state.menuSel = state.pen
           if (state.pinched) {
             state.pinched = false
             surface.current?.strokeEnd(id)
           }
-        } else if (state.fist && fold > FIST_OFF) {
-          // hand opens: commit the highlighted pen
-          state.fist = false
+        } else if (state.palm && spread < PALM_OFF) {
+          // hand relaxes: commit the highlighted pen
+          state.palm = false
           state.pen = state.menuSel
         }
 
-        if (state.fist) {
-          // spin the highlight as the fist rotates
+        if (state.palm) {
+          // spin the highlight as the palm rotates
           let d = roll - state.menuAngle
           while (d > Math.PI) d -= Math.PI * 2
           while (d < -Math.PI) d += Math.PI * 2
