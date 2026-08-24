@@ -324,6 +324,9 @@ export default function DrawSurface({
   const fieldSize = useRef({ w: 0, h: 0 })
   const hover = useRef<{ x: number; y: number } | null>(null)
   const frameCount = useRef(0)
+  const shoots = useRef<
+    { x: number; y: number; vx: number; vy: number; life: number }[]
+  >([])
   const strokesRef = useRef(strokes)
   strokesRef.current = strokes
   const onStrokesChangeRef = useRef(onStrokesChange)
@@ -469,6 +472,74 @@ export default function DrawSurface({
       g.fillStyle = grad
       g.fillRect(0, 0, w, h)
       g.restore()
+    }
+    // the universe behind everything: a twinkling starfield with a soft
+    // milky-way band drifting diagonally through the dark
+    {
+      const band = g.createLinearGradient(0, h * 0.85, w, h * 0.15)
+      band.addColorStop(0, '#1a1e2e00')
+      band.addColorStop(0.42, '#232a4210')
+      band.addColorStop(0.5, '#2c355418')
+      band.addColorStop(0.58, '#232a4210')
+      band.addColorStop(1, '#1a1e2e00')
+      g.globalAlpha = 1
+      g.fillStyle = band
+      g.fillRect(0, 0, w, h)
+      for (let i = 0; i < 160; i++) {
+        const r1 = Math.sin(i * 12.9898) * 43758.5453
+        const f1 = r1 - Math.floor(r1)
+        const r2 = Math.sin(i * 78.233) * 12543.123
+        const f2 = r2 - Math.floor(r2)
+        // most stars scatter everywhere; a third crowd the galactic band
+        let sx = f1
+        let sy = f2
+        if (i % 3 === 0) {
+          sy = 0.85 - sx * 0.7 + (f2 - 0.5) * 0.16
+        }
+        const tw = 0.5 + 0.5 * Math.sin(now / (420 + f1 * 700) + i * 1.9)
+        g.globalAlpha = (0.04 + f2 * 0.14) * tw
+        g.fillStyle = i % 7 === 0 ? '#cfe0ff' : i % 11 === 0 ? '#ffe9c9' : '#f3efe4'
+        g.beginPath()
+        g.arc(sx * w, sy * h, 0.5 + f1 * 1.3, 0, Math.PI * 2)
+        g.fill()
+      }
+      // shooting stars: rare streaks crossing the room
+      if (Math.random() < 0.004 && shoots.current.length < 2) {
+        shoots.current.push({
+          x: Math.random() * w,
+          y: Math.random() * h * 0.5,
+          vx: (6 + Math.random() * 5) * (Math.random() < 0.5 ? 1 : -1),
+          vy: 2.5 + Math.random() * 2,
+          life: 1,
+        })
+      }
+      g.lineCap = 'round'
+      for (let i = shoots.current.length - 1; i >= 0; i--) {
+        const sh = shoots.current[i]
+        sh.x += sh.vx
+        sh.y += sh.vy
+        sh.life -= 0.016
+        if (sh.life <= 0) {
+          shoots.current.splice(i, 1)
+          continue
+        }
+        const trail = g.createLinearGradient(
+          sh.x,
+          sh.y,
+          sh.x - sh.vx * 10,
+          sh.y - sh.vy * 10,
+        )
+        trail.addColorStop(0, '#f3efe4')
+        trail.addColorStop(1, '#f3efe400')
+        g.strokeStyle = trail
+        g.globalAlpha = 0.5 * sh.life
+        g.lineWidth = 1.6
+        g.beginPath()
+        g.moveTo(sh.x, sh.y)
+        g.lineTo(sh.x - sh.vx * 10, sh.y - sh.vy * 10)
+        g.stroke()
+      }
+      g.globalAlpha = 1
     }
     // topographic map: little hills drawn as concentric contour rings,
     // each ring wobbled by the height map so the contours read as terrain,
@@ -804,6 +875,29 @@ export default function DrawSurface({
             for (let ty = minY - 80; ty < maxY + 80; ty += T) {
               g.drawImage(tex, tx, ty, T, T)
             }
+          }
+        }
+        // every stroke is painted with galaxy dust: tiny star specks and a
+        // nebula haze riding the ribbon, whatever its colour
+        for (let i = 2; i < n - 2; i += 6) {
+          const p = pts[i]
+          const r1 = Math.sin(i * 41.17 + s.bornAt) * 26743.31
+          const f1 = r1 - Math.floor(r1)
+          const r2 = Math.sin(i * 9.311 + s.bornAt) * 8151.77
+          const f2 = r2 - Math.floor(r2)
+          const mx = p.x * w + (f1 - 0.5) * 30
+          const my = p.y * h + (f2 - 0.5) * 30
+          const tw = 0.5 + 0.5 * Math.sin(now / (240 + f2 * 400) + i * 2.3)
+          if (f1 < 0.18) {
+            // a brighter star with a soft halo
+            g.globalAlpha = alpha * tw * 0.9
+            g.fillStyle = '#fff8ea'
+            g.beginPath()
+            g.arc(mx, my, 0.8 + f2 * 1.4, 0, Math.PI * 2)
+            g.fill()
+            softMote(g, mx, my, 3 + f2 * 3, '#cfe0ff', alpha * tw * 0.35)
+          } else {
+            softMote(g, mx, my, 1 + f2 * 1.5, '#e8e3ff', alpha * tw * 0.22)
           }
         }
         for (let i = 3; i < n - 3; i += 9) {
