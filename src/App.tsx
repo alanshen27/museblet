@@ -56,11 +56,11 @@ export default function App() {
       // note density follows the hand's energy: fast sweeps play dense
       // sixteenth runs, slow drags leave long spacious notes
       const energy = Math.min(1, p.speed * 1.1)
-      const gap = (barMs() / 8) * (4 - energy * 3.2) // half-bar .. sixteenth
+      const gap = (barMs() / 8) * (3 - energy * 2.5) // 3/8-bar .. sixteenth
       if (now - live.t < gap) return
-      // rest roughly every third slot: phrases need air
+      // occasional breath, but sparse — constant rests read as stutter
       live.step++
-      if (live.step % 3 === 2) {
+      if (live.step % 5 === 4) {
         live.t = now
         return
       }
@@ -79,9 +79,10 @@ export default function App() {
       if (midi === live.midi && now - live.t < gap * 2) return
       live.midi = midi
       live.t = now
-      // faster gestures strike harder and shorter; slow ones ring out
+      // legato: each note rings past the next trigger so the line is
+      // continuous — no dead air between notes while the hand moves
       const velocity = Math.round(24 + p.pressure * 30 + energy * 30)
-      const durationMs = 260 + (1 - energy) * 520
+      const durationMs = gap * 1.8 + 200
       emit({ timeMs: 0, pen: penId, midi, velocity, durationMs })
     },
     [penId, emit],
@@ -200,20 +201,6 @@ export default function App() {
           />
         ))}
         <span className="dock-sep" />
-        <button
-          className={`glyph ${playing ? 'active' : ''}`}
-          onClick={playing ? stop : play}
-          aria-label={playing ? 'stop' : 'play'}
-        >
-          {playing ? '■' : '▶'}
-        </button>
-        <button
-          className="glyph"
-          onClick={() => setStrokes([])}
-          aria-label="clear"
-        >
-          ✕
-        </button>
         <input
           className="tempo"
           type="range"
