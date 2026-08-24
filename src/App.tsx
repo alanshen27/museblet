@@ -9,6 +9,7 @@ import {
   type NoteEvent,
   type Stroke,
 } from './music'
+import { chordAt, snapToChord } from './harmony'
 import { PENS, type PenId } from './pens'
 import './App.css'
 
@@ -42,28 +43,63 @@ export default function App() {
     [inMax],
   )
 
-  // live performance: the surface sings under the pen while drawing
+  // live performance: the surface sings under the pen while drawing.
+  // Notes are throttled, snapped to the current chord, and leaps are
+  // reined in so it phrases instead of running scales.
   const liveRef = useRef({ t: 0, midi: -1 })
+  const lastDrawRef = useRef(0)
+  const tempoRef = useRef(tempo)
+  tempoRef.current = tempo
+  const barMs = () => (60000 / tempoRef.current) * 2
+
   const onDrawPoint = useCallback(
     (p: { x: number; y: number; pressure: number }) => {
-      const midi = yToMidi(p.y, scaleRef.current)
       const now = performance.now()
+      lastDrawRef.current = now
       const live = liveRef.current
-      if (midi === live.midi && now - live.t < 120) return
+      if (now - live.t < 180) return
+      const chord = chordAt(scaleRef.current, Math.floor(now / barMs()))
+      let midi = snapToChord(yToMidi(p.y, scaleRef.current), chord)
+      // rein in wild leaps: stay within a sixth of the last note
+      if (live.midi >= 0) {
+        while (midi - live.midi > 9) midi -= 12
+        while (live.midi - midi > 9) midi += 12
+      }
+      if (midi === live.midi && now - live.t < 400) return
       live.midi = midi
       live.t = now
-      const velocity = Math.round(35 + p.pressure * 85)
-      const n: NoteEvent = {
-        timeMs: 0,
-        pen: penId,
-        midi,
-        velocity,
-        durationMs: 220,
-      }
-      emit(n)
+      const velocity = Math.round(30 + p.pressure * 70)
+      emit({ timeMs: 0, pen: penId, midi, velocity, durationMs: 380 })
     },
     [penId, emit],
   )
+
+  // harmonic bed: soft pad chords + bass root underneath, while playing
+  // or while the pen is moving
+  useEffect(() => {
+    let lastBar = -1
+    const id = setInterval(() => {
+      const now = performance.now()
+      const active = playing || now - lastDrawRef.current < 5000
+      if (!active) return
+      const bar = Math.floor(now / barMs())
+      if (bar === lastBar) return
+      lastBar = bar
+      const chord = chordAt(scaleRef.current, bar)
+      const dur = barMs() * 1.1
+      for (const m of chord) {
+        emit({ timeMs: 0, pen: 'velvet', midi: m, velocity: 26, durationMs: dur })
+      }
+      emit({
+        timeMs: 0,
+        pen: 'ember',
+        midi: chord[0] - 24,
+        velocity: 42,
+        durationMs: dur,
+      })
+    }, 120)
+    return () => clearInterval(id)
+  }, [playing, emit])
 
   const stop = useCallback(() => {
     setPlaying(false)
