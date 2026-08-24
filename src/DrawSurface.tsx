@@ -66,6 +66,29 @@ interface Pt {
   pressure: number
 }
 
+// a luminous mote: soft-edged radial glow instead of a hard-edged dot,
+// so particles read as embers/powder/light rather than metal flakes
+function softMote(
+  g: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  color: string,
+  alpha: number,
+  core = 0.35,
+) {
+  if (r <= 0 || alpha <= 0) return
+  const grad = g.createRadialGradient(x, y, 0, x, y, r)
+  grad.addColorStop(0, 'rgba(255,250,240,0.9)')
+  grad.addColorStop(core, color)
+  grad.addColorStop(1, `${color}00`)
+  g.globalAlpha = alpha
+  g.fillStyle = grad
+  g.beginPath()
+  g.arc(x, y, r, 0, Math.PI * 2)
+  g.fill()
+}
+
 // moving-average pass: irons out hand jitter before curve fitting
 function relaxPoints(pts: Pt[], passes = 2): Pt[] {
   let cur = pts
@@ -171,7 +194,7 @@ export default function DrawSurface({
         y,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed - 0.6,
-        size: big ? 1.2 + Math.random() * 2.8 : 1 + Math.random() * 1.5,
+        size: big ? 2.5 + Math.random() * 4.5 : 1.5 + Math.random() * 2.5,
         life: 1,
         decay: big ? 0.008 + Math.random() * 0.01 : 0.03,
         color: spark,
@@ -208,7 +231,7 @@ export default function DrawSurface({
         y,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
-        size: 0.6 + Math.random() * 2.2,
+        size: 1.5 + Math.random() * 4,
         life: 1,
         decay: 0.003 + Math.random() * 0.004,
         color,
@@ -328,12 +351,18 @@ export default function DrawSurface({
           const ox = (r1 - Math.floor(r1) - 0.5) * 26 * p.pressure
           const oy = (r2 - Math.floor(r2) - 0.5) * 26 * p.pressure
           const r3 = Math.sin(i * 3.7 + s.bornAt) * 9631.77
-          const size = 0.5 + (r3 - Math.floor(r3)) * 2.4
-          g.globalAlpha = baseAlpha * (0.15 + (r1 - Math.floor(r1)) * 0.5)
-          g.fillStyle = (r2 - Math.floor(r2)) < 0.25 ? '#efe9dd' : pen.color
-          g.beginPath()
-          g.arc(p.x * w + ox, p.y * h + oy, size, 0, Math.PI * 2)
-          g.fill()
+          const size = 1.5 + (r3 - Math.floor(r3)) * 4.5
+          const dotColor =
+            (r2 - Math.floor(r2)) < 0.25 ? '#efe9dd' : pen.color
+          softMote(
+            g,
+            p.x * w + ox,
+            p.y * h + oy,
+            size,
+            dotColor,
+            baseAlpha * (0.08 + (r1 - Math.floor(r1)) * 0.3),
+            0.2,
+          )
         }
         g.globalAlpha = 1
         continue
@@ -507,16 +536,20 @@ export default function DrawSurface({
       r.life -= 0.03
       if (r.life <= 0) continue
       aliveRings.push(r)
-      g.globalAlpha = r.life * 0.6
+      g.globalAlpha = r.life * 0.25
       g.strokeStyle = r.color
-      g.lineWidth = 1.5 + r.life * 2
+      g.shadowColor = r.color
+      g.shadowBlur = 12
+      g.lineWidth = 1 + r.life * 1.5
       g.beginPath()
       g.arc(r.x, r.y, r.r, 0, Math.PI * 2)
       g.stroke()
     }
     rings.current = aliveRings
+    g.shadowBlur = 0
 
-    // particles / glitter
+    // particles / glitter — drawn additively so they read as light
+    g.globalCompositeOperation = 'lighter'
     const alive: Particle[] = []
     for (const p of particles.current) {
       if (p.kind === 'chalk') {
@@ -550,27 +583,35 @@ export default function DrawSurface({
       if (p.life <= 0) continue
       alive.push(p)
       if (p.kind === 'drop') {
-        // a falling streak, not a dot
-        g.globalAlpha = p.life * 0.8
-        g.strokeStyle = p.color
-        g.shadowBlur = 0
-        g.lineWidth = p.size * 0.7
+        // a misty falling streak: gradient tail fading in from above
+        const tail = p.vy * 7
+        const streak = g.createLinearGradient(p.x, p.y - tail, p.x, p.y)
+        streak.addColorStop(0, `${p.color}00`)
+        streak.addColorStop(1, p.color)
+        g.globalAlpha = p.life * 0.45
+        g.strokeStyle = streak
+        g.lineCap = 'round'
+        g.lineWidth = p.size
         g.beginPath()
-        g.moveTo(p.x, p.y - p.vy * 5)
+        g.moveTo(p.x, p.y - tail)
         g.lineTo(p.x, p.y)
         g.stroke()
+        softMote(g, p.x, p.y, p.size * 1.6, p.color, p.life * 0.35)
         continue
       }
       const tw = 0.6 + 0.4 * Math.sin(now / 80 + p.x)
-      g.globalAlpha = p.life * tw
-      g.fillStyle = p.color
-      g.shadowColor = p.color
-      g.shadowBlur = p.kind === 'chalk' ? 0 : 6
-      g.beginPath()
-      g.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2)
-      g.fill()
+      softMote(
+        g,
+        p.x,
+        p.y,
+        p.size * (p.kind === 'chalk' ? 1 : 1.6) * (0.4 + p.life * 0.6),
+        p.color,
+        p.life * tw * (p.kind === 'chalk' ? 0.5 : 0.85),
+        p.kind === 'chalk' ? 0.15 : 0.35,
+      )
     }
     particles.current = alive
+    g.globalCompositeOperation = 'source-over'
     g.globalAlpha = 1
     g.shadowBlur = 0
 
