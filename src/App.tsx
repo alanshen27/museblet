@@ -12,7 +12,9 @@ export default function App() {
   const [strokes, setStrokes] = useState<Stroke[]>([])
   const [playing, setPlaying] = useState(false)
   const [tempo, setTempo] = useState(120)
-  const [scale, setScale] = useState('pentatonic')
+  const [scale, setScale] = useState('minor')
+  // the dock stays hidden until summoned with Tab: pure dark room
+  const [dockOpen, setDockOpen] = useState(false)
   const [penId, setPenId] = useState<PenId>('neon')
   const [playheadX, setPlayheadX] = useState<number | null>(null)
   const inMax = isMax()
@@ -114,6 +116,17 @@ export default function App() {
   // hand tracking: camera-tracked fingertips as input (touch stays as fallback)
   const surfaceHandle = useRef<DrawHandle | null>(null)
   const [handsOn, setHandsOn] = useState(false)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        setDockOpen((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // harmonic bed: soft pad chords + bass root underneath, while playing
   // or while the pen is moving
@@ -220,6 +233,7 @@ export default function App() {
         />
         {handsOn && <HandLayer surface={surfaceHandle} />}
       </main>
+      {dockOpen && (
       <nav className="dock">
         {PENS.map((p) => (
           <button
@@ -262,6 +276,7 @@ export default function App() {
           ))}
         </select>
       </nav>
+      )}
     </div>
   )
 }

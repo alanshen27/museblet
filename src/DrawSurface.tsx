@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { Stroke } from './music'
 import { getPen, PENS } from './pens'
+import { playExplosion } from './audio'
 
 export interface DrawPoint {
   x: number
@@ -21,7 +22,7 @@ export interface SurfaceCursor {
   kind?: 'tip' | 'thumb'
 }
 
-/** a radial pen wheel summoned around a fist */
+/** a radial pen wheel summoned around an open palm */
 export interface SurfaceMenu {
   x: number
   y: number
@@ -152,6 +153,14 @@ const smoothCache = new WeakMap<
 // ribbon of this many points follows the hand
 const TRAIL_POINTS = 70
 
+// aurora curtains: wide muted-colour glows drifting slowly across the dark
+const AURORA = [
+  { y: 0.18, r: 0.5, color: '#3d5a52', alpha: 0.1, driftX: 0.05, driftY: 0.03, phase: 0.4 },
+  { y: 0.1, r: 0.6, color: '#4a3d5e', alpha: 0.08, driftX: 0.037, driftY: 0.021, phase: 2.1 },
+  { y: 0.3, r: 0.45, color: '#5e4a3d', alpha: 0.07, driftX: 0.028, driftY: 0.041, phase: 4.4 },
+  { y: 0.22, r: 0.55, color: '#3d4a5e', alpha: 0.09, driftX: 0.045, driftY: 0.026, phase: 5.6 },
+]
+
 // Catmull-Rom resampling: turns raw pointer points into a flowing curve
 function smoothPoints(raw: Pt[], subdiv = 8): Pt[] {
   const cached = smoothCache.get(raw)
@@ -234,26 +243,45 @@ export default function DrawSurface({
   playheadRef.current = playheadX
 
   const spawnBurst = (x: number, y: number, color: string, big: boolean) => {
-    const n = big ? 36 : 8
+    const n = big ? 90 : 8
     for (let i = 0; i < n; i++) {
       const angle = Math.random() * Math.PI * 2
-      const speed = (big ? 3.6 : 1.2) * (0.3 + Math.random())
+      const speed = (big ? 6.5 : 1.2) * (0.25 + Math.random())
       // fireworks: mostly pen-coloured sparks with a few white-hot ones
       const spark = big && Math.random() < 0.3 ? '#f3efe4' : color
       particles.current.push({
         x,
         y,
         vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed - 0.6,
-        size: big ? 2.5 + Math.random() * 4.5 : 1.5 + Math.random() * 2.5,
+        vy: Math.sin(angle) * speed - 0.9,
+        size: big ? 3 + Math.random() * 6.5 : 1.5 + Math.random() * 2.5,
         life: 1,
-        decay: big ? 0.008 + Math.random() * 0.01 : 0.03,
+        decay: big ? 0.006 + Math.random() * 0.008 : 0.03,
         color: spark,
       })
     }
     if (big) {
       rings.current.push({ x, y, r: 4, life: 1, color })
       rings.current.push({ x, y, r: 1, life: 1.2, color: '#f3efe4' })
+      rings.current.push({ x, y, r: 12, life: 0.8, color })
+      // delayed crackle: a second smaller wave of sparks
+      setTimeout(() => {
+        for (let i = 0; i < 24; i++) {
+          const a = Math.random() * Math.PI * 2
+          const s = 2.5 * (0.3 + Math.random())
+          particles.current.push({
+            x: x + (Math.random() - 0.5) * 60,
+            y: y + (Math.random() - 0.5) * 60,
+            vx: Math.cos(a) * s,
+            vy: Math.sin(a) * s - 0.4,
+            size: 1.5 + Math.random() * 3,
+            life: 1,
+            decay: 0.015,
+            color: Math.random() < 0.5 ? '#f3efe4' : color,
+          })
+        }
+      }, 180)
+      playExplosion(1)
     }
   }
 
@@ -315,6 +343,50 @@ export default function DrawSurface({
     const now = performance.now()
 
     g.clearRect(0, 0, w, h)
+
+    // generative backdrop: aurora curtains drifting high in the dark,
+    // ocean swells breathing along the bottom — barely-there light
+    g.globalCompositeOperation = 'lighter'
+    const t0 = now / 1000
+    for (let i = 0; i < AURORA.length; i++) {
+      const a = AURORA[i]
+      const cx = (0.5 + 0.42 * Math.sin(t0 * a.driftX + a.phase)) * w
+      const cy = (a.y + 0.08 * Math.sin(t0 * a.driftY + a.phase * 2)) * h
+      const breathe = 0.75 + 0.25 * Math.sin(t0 * 0.23 + a.phase * 3)
+      const grad = g.createRadialGradient(cx, cy, 0, cx, cy, a.r * Math.min(w, h))
+      grad.addColorStop(0, a.color)
+      grad.addColorStop(1, `${a.color.slice(0, 7)}00`)
+      g.globalAlpha = a.alpha * breathe
+      g.save()
+      g.translate(cx, cy)
+      g.scale(2.6, 0.8) // stretched wide: curtain, not spotlight
+      g.translate(-cx, -cy)
+      g.fillStyle = grad
+      g.fillRect(0, 0, w, h)
+      g.restore()
+    }
+    // ocean: slow sine swells rolling across the lower third
+    for (let i = 0; i < 3; i++) {
+      const baseY = h * (0.78 + i * 0.07)
+      const amp = h * 0.02 * (1 + i * 0.4)
+      const speed = 0.12 + i * 0.05
+      g.globalAlpha = 0.05 - i * 0.01
+      g.fillStyle = i === 0 ? '#5a6f8a' : '#3d5a70'
+      g.beginPath()
+      g.moveTo(0, h)
+      for (let x = 0; x <= w; x += 16) {
+        const y =
+          baseY +
+          amp * Math.sin((x / w) * Math.PI * 3 + t0 * speed * Math.PI * 2 + i * 1.7) +
+          amp * 0.5 * Math.sin((x / w) * Math.PI * 7 - t0 * speed * 3)
+        g.lineTo(x, y)
+      }
+      g.lineTo(w, h)
+      g.closePath()
+      g.fill()
+    }
+    g.globalCompositeOperation = 'source-over'
+    g.globalAlpha = 1
 
     // heavy room: vignette pressing in from the edges
     const vignette = g.createRadialGradient(
@@ -556,13 +628,14 @@ export default function DrawSurface({
     // firework dabs: blobs swell with light, then burst
     const aliveBlobs: Blob_[] = []
     for (const b of blobs.current) {
-      const t = (now - b.born) / 650
+      const t = (now - b.born) / 850
       if (t >= 1) {
         spawnBurst(b.x, b.y, b.color, true)
         continue
       }
       aliveBlobs.push(b)
-      const r = b.size * (0.5 + t * 1.3)
+      // swell dramatically, quivering harder just before detonation
+      const r = b.size * (0.5 + t * t * 2.6)
       const glow = g.createRadialGradient(b.x, b.y, 0, b.x, b.y, r * 3)
       glow.addColorStop(0, b.glow)
       glow.addColorStop(1, 'rgba(0,0,0,0)')
@@ -709,7 +782,7 @@ export default function DrawSurface({
       }
     }
 
-    // radial pen wheel: swatches orbiting a fist, rotate to highlight
+    // radial pen wheel: swatches orbiting an open palm, rotate to highlight
     for (const m of menus.current) {
       const mx = m.x * w
       const my = m.y * h
@@ -736,7 +809,7 @@ export default function DrawSurface({
           g.stroke()
         }
       })
-      // centre: the currently highlighted colour glows in the fist
+      // centre: the currently highlighted colour glows in the palm
       softMote(g, mx, my, 16, PENS[m.selected].color, 0.8)
     }
     g.globalCompositeOperation = 'source-over'
@@ -819,7 +892,7 @@ export default function DrawSurface({
           color: pen.color,
           glow: pen.glow,
           born: performance.now(),
-          size: 6 + p0.pressure * 10,
+          size: 14 + p0.pressure * 20,
         })
         return
       }
