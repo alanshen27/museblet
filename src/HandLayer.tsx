@@ -49,8 +49,15 @@ const FIST_FRAMES = 6
 const CAM_MARGIN = 0.18
 
 // camera footage is shaky: exponentially smooth each fingertip before it
-// ever reaches the stroke, on top of the surface's own relax/curve passes
-const SMOOTH = 0.35
+// ever reaches the stroke, on top of the surface's own relax/curve passes.
+// The factor adapts to speed (One Euro style): slow hovers get heavy
+// smoothing, fast sweeps track nearly raw so the dot never lags the hand
+const SMOOTH_MIN = 0.3
+const SMOOTH_MAX = 0.85
+
+// tracking drops out for a few frames at a time: keep a lost hand's stroke
+// alive this many frames before releasing it, so lines don't shatter
+const MISS_FRAMES = 10
 
 interface HandState {
   pinched: boolean
@@ -65,6 +72,7 @@ interface HandState {
   menuSel: number
   pinchHold: number // consecutive frames the pinch condition has held
   fistHold: number // consecutive frames the fist condition has held
+  miss: number // consecutive frames the hand has been lost by tracking
 }
 
 interface Props {
@@ -134,15 +142,19 @@ export default function HandLayer({ surface }: Props) {
           menuSel: 0,
           pinchHold: 0,
           fistHold: 0,
+          miss: 0,
         }
+        state.miss = 0
         // webcam glitch guard: when tracking clips out the landmark can
         // teleport across the frame for a frame or two — ignore impossible
         // jumps instead of letting the stroke leap with them
         const jump = Math.hypot(rawX - state.sx, rawY - state.sy)
         if (jump < 0.25 || state.glitch > 5) {
-          // a sustained "jump" is a real move: snap back onto the hand
-          state.sx += (rawX - state.sx) * SMOOTH
-          state.sy += (rawY - state.sy) * SMOOTH
+          // a sustained "jump" is a real move: snap back onto the hand.
+          // adaptive smoothing: the faster the move, the tighter we follow
+          const a = Math.min(SMOOTH_MAX, SMOOTH_MIN + jump * 6)
+          state.sx += (rawX - state.sx) * a
+          state.sy += (rawY - state.sy) * a
           state.glitch = 0
         } else {
           state.glitch++
@@ -249,20 +261,32 @@ export default function HandLayer({ surface }: Props) {
           kind: 'thumb',
         })
       })
-      // hands that left the frame release their strokes
+      // hands that left the frame: give tracking a grace period to find
+      // them again before their strokes are released
       for (const [hand, s] of hands) {
         if (!seen.has(hand)) {
-          if (s.pinched) surface.current?.strokeEnd(1000 + hand)
-          hands.delete(hand)
+          s.miss++
+          if (s.miss >= MISS_FRAMES) {
+            if (s.pinched) surface.current?.strokeEnd(1000 + hand)
+            hands.delete(hand)
+          }
         }
       }
       surface.current?.setCursors(cursors)
       surface.current?.setMenus(menus)
     }
 
+    let lastVideoTime = -1
     const loop = () => {
       if (stopped) return
-      if (landmarker && video.readyState >= 2) {
+      // only run detection on fresh camera frames — re-detecting the same
+      // frame wastes GPU and adds jitter
+      if (
+        landmarker &&
+        video.readyState >= 2 &&
+        video.currentTime !== lastVideoTime
+      ) {
+        lastVideoTime = video.currentTime
         onFrame(landmarker.detectForVideo(video, performance.now()))
       }
       raf = requestAnimationFrame(loop)
@@ -287,6 +311,10 @@ export default function HandLayer({ surface }: Props) {
           baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
           runningMode: 'VIDEO',
           numHands: 2,
+          // hold onto a found hand more stubbornly than the defaults do
+          minHandDetectionConfidence: 0.4,
+          minHandPresenceConfidence: 0.4,
+          minTrackingConfidence: 0.4,
         })
         loop()
       } catch (err) {

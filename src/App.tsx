@@ -108,6 +108,24 @@ export default function App() {
       )
       const durationMs = gap * 1.8 + 200
       emit({ timeMs: 0, pen, midi, velocity, durationMs })
+      // memory echoes: each phrase softly re-sings itself a bar later and
+      // again two bars on — a fading canon of what the hand just played,
+      // re-snapped to whatever chord holds when the echo lands
+      for (const [delay, fade] of [
+        [barMs(), 0.45],
+        [barMs() * 2, 0.2],
+      ] as const) {
+        window.setTimeout(() => {
+          const c = chordAt(scaleRef.current, chordIndex(performance.now()))
+          emit({
+            timeMs: 0,
+            pen,
+            midi: snapToChord(midi, c),
+            velocity: Math.max(6, Math.round(velocity * fade)),
+            durationMs: durationMs * 1.4,
+          })
+        }, delay)
+      }
     },
     [emit, inMax],
   )
