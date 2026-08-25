@@ -36,6 +36,8 @@ export interface DrawHandle {
   strokeStart: (id: number, penId: string, p: DrawPoint) => void
   strokeMove: (id: number, penId: string, p: DrawPoint) => void
   strokeEnd: (id: number) => void
+  /** drop an in-progress stroke without leaving ink (e.g. fist took over) */
+  strokeCancel: (id: number) => void
   setCursors: (cursors: SurfaceCursor[]) => void
   setMenus: (menus: SurfaceMenu[]) => void
 }
@@ -1337,12 +1339,23 @@ export default function DrawSurface({
     onDrawEndRef.current?.(id)
   }, [])
 
+  const strokeCancel = useCallback((id: number) => {
+    const stroke = activeStrokes.current.get(id)
+    activeStrokes.current.delete(id)
+    pointerState.current.delete(id)
+    if (stroke) {
+      onStrokesChangeRef.current(strokesRef.current.filter((s) => s !== stroke))
+    }
+    onDrawEndRef.current?.(id)
+  }, [])
+
   useEffect(() => {
     if (!handleRef) return
     handleRef.current = {
       strokeStart,
       strokeMove,
       strokeEnd,
+      strokeCancel,
       setCursors: (c) => {
         cursors.current = c
       },
@@ -1353,7 +1366,7 @@ export default function DrawSurface({
     return () => {
       handleRef.current = null
     }
-  }, [handleRef, strokeStart, strokeMove, strokeEnd])
+  }, [handleRef, strokeStart, strokeMove, strokeEnd, strokeCancel])
 
   return (
     <canvas

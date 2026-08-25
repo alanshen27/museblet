@@ -5,7 +5,9 @@ import { glideStop, glideTo, playNote } from './audio'
 import { bindInlet, isMax, outletMessage, outletNote } from './max'
 import { SCALES, strokesToNotes, type NoteEvent, type Stroke } from './music'
 import { chordAt, snapToChord } from './harmony'
-import { PENS, type PenId } from './pens'
+import { type PenId } from './pens'
+// PENS import is only needed by the commented-out dock
+// import { PENS, type PenId } from './pens'
 import './App.css'
 
 export default function App() {
@@ -13,9 +15,10 @@ export default function App() {
   const [playing, setPlaying] = useState(false)
   const [tempo, setTempo] = useState(120)
   const [scale, setScale] = useState('minor')
-  // the dock stays hidden until summoned with Tab: pure dark room
-  const [dockOpen, setDockOpen] = useState(false)
-  const [penId, setPenId] = useState<PenId>('neon')
+  // dock (bottom bar) commented out — Tab no longer summons it
+  // const [dockOpen, setDockOpen] = useState(false)
+  const [penId] = useState<PenId>('neon')
+  // setPenId lives on the commented-out dock; fist wheel still switches pens per hand
   const [playheadX, setPlayheadX] = useState<number | null>(null)
   const inMax = isMax()
 
@@ -134,20 +137,21 @@ export default function App() {
     glideStop(pointerId)
   }, [])
 
-  // hand tracking: camera-tracked fingertips as input (touch stays as fallback)
+  // hand tracking: on by default. Camera-tracked fingertips as input
+  // (touch/mouse stay as fallback). Dock ✋ toggle is with the bottom bar.
   const surfaceHandle = useRef<DrawHandle | null>(null)
-  const [handsOn, setHandsOn] = useState(false)
+  const [handsOn] = useState(true)
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Tab') {
-        e.preventDefault()
-        setDockOpen((v) => !v)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  // useEffect(() => {
+  //   const onKey = (e: KeyboardEvent) => {
+  //     if (e.key === 'Tab') {
+  //       e.preventDefault()
+  //       setDockOpen((v) => !v)
+  //     }
+  //   }
+  //   window.addEventListener('keydown', onKey)
+  //   return () => window.removeEventListener('keydown', onKey)
+  // }, [])
 
   // harmonic bed: soft pad chords + bass root underneath, while playing
   // or while the pen is moving
@@ -263,6 +267,7 @@ export default function App() {
         />
         {handsOn && <HandLayer surface={surfaceHandle} />}
       </main>
+      {/* bottom bar
       {dockOpen && (
       <nav className="dock">
         {PENS.map((p) => (
@@ -307,6 +312,7 @@ export default function App() {
         </select>
       </nav>
       )}
+      */}
     </div>
   )
 }
