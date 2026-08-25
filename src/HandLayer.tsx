@@ -72,6 +72,9 @@ interface HandState {
   menuSel: number
   pinchHold: number // consecutive frames the pinch condition has held
   fistHold: number // consecutive frames the fist condition has held
+  clickArmed: boolean // index has lifted off the thumb since the wheel opened
+  clickHold: number // consecutive frames the confirm tap has held
+  cooldown: number // frames after a confirm tap during which gestures are ignored
   miss: number // consecutive frames the hand has been lost by tracking
 }
 
@@ -82,8 +85,8 @@ interface Props {
 /**
  * Camera hand tracking: MediaPipe finds up to two hands. Pinching index to
  * thumb draws (and plays) with the hand's current pen; bunching a fist
- * summons a radial pen wheel — rotate the fist to spin the highlight
- * and open the hand to select.
+ * summons a radial pen wheel — rotate the fist to spin the highlight,
+ * then tap index to thumb (or open the hand) to confirm the colour.
  */
 export default function HandLayer({ surface }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -142,6 +145,9 @@ export default function HandLayer({ surface }: Props) {
           menuSel: 0,
           pinchHold: 0,
           fistHold: 0,
+          clickArmed: false,
+          clickHold: 0,
+          cooldown: 0,
           miss: 0,
         }
         state.miss = 0
@@ -182,13 +188,23 @@ export default function HandLayer({ surface }: Props) {
         const id = 1000 + hand
         // debounced fist: bunched fingers mid-pinch can look fist-like for
         // a frame or two — only a held fist summons or dismisses the wheel
+        if (state.cooldown > 0) state.cooldown--
         const fistCond = state.fist ? spread > FIST_OFF : spread < FIST_ON
         state.fistHold = fistCond ? state.fistHold + 1 : 0
-        if (!state.fist && !state.pinched && state.fistHold >= FIST_FRAMES) {
+        if (
+          !state.fist &&
+          !state.pinched &&
+          state.cooldown === 0 &&
+          state.fistHold >= FIST_FRAMES
+        ) {
           state.fist = true
           state.fistHold = 0
           state.menuAngle = roll
           state.menuSel = state.pen
+          // a bunched fist starts with the index near the thumb, so the
+          // confirm tap only arms once the finger has lifted away
+          state.clickArmed = false
+          state.clickHold = 0
         } else if (state.fist && state.fistHold >= FIST_FRAMES) {
           // hand opens: commit the highlighted pen
           state.fist = false
@@ -204,6 +220,24 @@ export default function HandLayer({ surface }: Props) {
           const steps = Math.round(d / STEP_RAD)
           state.menuSel =
             (((state.pen + steps) % PENS.length) + PENS.length) % PENS.length
+          // tap index to thumb to confirm the highlighted colour
+          if (!state.clickArmed) {
+            if (pinchDist > PINCH_OFF) state.clickArmed = true
+          } else if (pinchDist < PINCH_ON) {
+            state.clickHold++
+            if (state.clickHold >= PINCH_FRAMES) {
+              state.pen = state.menuSel
+              state.fist = false
+              state.fistHold = 0
+              state.clickArmed = false
+              state.clickHold = 0
+              state.cooldown = 12
+              hands.set(hand, state)
+              return
+            }
+          } else {
+            state.clickHold = 0
+          }
           menus.push({
             x: zoom(1 - mcp.x),
             y: zoom(mcp.y),
@@ -227,7 +261,11 @@ export default function HandLayer({ surface }: Props) {
           ? pinchDist > PINCH_OFF
           : pinchDist < PINCH_ON
         state.pinchHold = pinchCond ? state.pinchHold + 1 : 0
-        if (!state.pinched && state.pinchHold >= PINCH_FRAMES) {
+        if (
+          !state.pinched &&
+          state.cooldown === 0 &&
+          state.pinchHold >= PINCH_FRAMES
+        ) {
           state.pinched = true
           state.pinchHold = 0
           surface.current?.strokeStart(id, pen, p)
