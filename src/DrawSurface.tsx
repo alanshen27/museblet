@@ -1213,7 +1213,8 @@ export default function DrawSurface({
     // fully dissolved strokes leave the canvas (and the music)
     const living = strokesRef.current.filter(
       (s) =>
-        s.points.length > 1 && now - s.bornAt < LINGER_MS + DISSOLVE_MS,
+        activeSet.has(s) ||
+        (s.points.length > 1 && now - s.bornAt < LINGER_MS + DISSOLVE_MS),
     )
     if (living.length !== strokesRef.current.length) {
       onStrokesChangeRef.current(living)
@@ -1311,6 +1312,11 @@ export default function DrawSurface({
     stroke.points.push(p)
     while (stroke.points.length > TRAIL_POINTS) stroke.points.shift()
     stroke.bornAt = performance.now()
+    // the stroke may have been culled from the list while it only had one
+    // point, so put it back rather than just re-emitting the stale list
+    if (!strokesRef.current.includes(stroke)) {
+      onStrokesChangeRef.current([...strokesRef.current, stroke])
+    }
     onDrawPointRef.current?.(id, pid, p)
     const canvas = canvasRef.current
     const pen = getPen(pid)
