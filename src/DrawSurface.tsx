@@ -557,11 +557,11 @@ export default function DrawSurface({
         for (let k = 1; k <= hill.rings; k++) {
           const v = k / hill.rings
           const radius = maxR * v * breathe
-          const col = k % 2 === 0 ? '#5a6f8a' : '#4a5e78'
+          const col = k % 2 === 0 ? '#7189a6' : '#5d7492'
           g.strokeStyle = col
           // inner rings (the summit) glow a touch brighter
-          g.globalAlpha = 0.028 + 0.05 * (1 - v)
-          g.lineWidth = 1.2
+          g.globalAlpha = 0.07 + 0.1 * (1 - v)
+          g.lineWidth = 1.5
           g.beginPath()
           const STEPS = 72
           for (let i = 0; i <= STEPS; i++) {

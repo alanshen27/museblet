@@ -68,7 +68,8 @@ interface HandState {
   glitch: number // consecutive frames rejected as tracking glitches
   pen: number // index into PENS
   fist: boolean
-  menuAngle: number // hand roll angle when the fist closed
+  menuAngle: number // roll angle the wheel's current detent is anchored to
+  sroll: number // smoothed hand roll while the wheel is open
   menuSel: number
   pinchHold: number // consecutive frames the pinch condition has held
   fistHold: number // consecutive frames the fist condition has held
@@ -142,6 +143,7 @@ export default function HandLayer({ surface }: Props) {
           pen: hand % PENS.length,
           fist: false,
           menuAngle: 0,
+          sroll: 0,
           menuSel: 0,
           pinchHold: 0,
           fistHold: 0,
@@ -200,6 +202,7 @@ export default function HandLayer({ surface }: Props) {
           state.fist = true
           state.fistHold = 0
           state.menuAngle = roll
+          state.sroll = roll
           state.menuSel = state.pen
           // a bunched fist starts with the index near the thumb, so the
           // confirm tap only arms once the finger has lifted away
@@ -213,13 +216,27 @@ export default function HandLayer({ surface }: Props) {
         }
 
         if (state.fist) {
-          // spin the highlight as the fist rotates
-          let d = roll - state.menuAngle
+          // spin the highlight as the fist rotates. The raw roll jitters
+          // with the camera, so it's smoothed first, then fed through a
+          // rotary detent: the highlight only steps once the smoothed roll
+          // travels a full notch past its anchor, and the anchor ratchets
+          // along — twitches inside a notch never flip the selection
+          let dr = roll - state.sroll
+          while (dr > Math.PI) dr -= Math.PI * 2
+          while (dr < -Math.PI) dr += Math.PI * 2
+          state.sroll += dr * 0.3
+          let d = state.sroll - state.menuAngle
           while (d > Math.PI) d -= Math.PI * 2
           while (d < -Math.PI) d += Math.PI * 2
-          const steps = Math.round(d / STEP_RAD)
-          state.menuSel =
-            (((state.pen + steps) % PENS.length) + PENS.length) % PENS.length
+          const steps = Math.trunc(d / STEP_RAD)
+          if (steps !== 0) {
+            state.menuSel =
+              (((state.menuSel + steps) % PENS.length) + PENS.length) %
+              PENS.length
+            state.menuAngle += steps * STEP_RAD
+            while (state.menuAngle > Math.PI) state.menuAngle -= Math.PI * 2
+            while (state.menuAngle < -Math.PI) state.menuAngle += Math.PI * 2
+          }
           // tap index to thumb to confirm the highlighted colour
           if (!state.clickArmed) {
             if (pinchDist > PINCH_OFF) state.clickArmed = true
