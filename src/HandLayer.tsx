@@ -21,6 +21,7 @@ const MODEL_URL =
 const THUMB_TIP = 4
 const INDEX_TIP = 8
 const FINGER_TIPS = [8, 12, 16, 20]
+const REST_TIPS = [12, 16, 20] // middle/ring/pinky
 const WRIST = 0
 const MIDDLE_MCP = 9
 
@@ -33,6 +34,10 @@ const PINCH_OFF = 0.44
 // bunched fist curls the fingertips back in towards the wrist
 const FIST_ON = 1.1
 const FIST_OFF = 1.35
+
+// a real drawing pinch keeps the middle/ring/pinky extended; if they're
+// curled too, the hand is bunching into a fist, so don't start a stroke
+const REST_OPEN = 1.25
 
 // rotating the fist by this much moves the wheel highlight by one pen:
 // very sensitive, so a small twist spins the selection
@@ -184,6 +189,14 @@ export default function HandLayer({ surface }: Props) {
             0,
           ) /
           (4 * (palm || 1))
+        // spread of the three non-index fingers: tells a pinch pose
+        // (extended) apart from a hand bunching into a fist (curled)
+        const restSpread =
+          REST_TIPS.reduce(
+            (sum, i) => sum + Math.hypot(lm[i].x - wrist.x, lm[i].y - wrist.y),
+            0,
+          ) /
+          (3 * (palm || 1))
         // hand roll: angle of the wrist -> middle-knuckle axis (mirrored x)
         const roll = Math.atan2(mcp.y - wrist.y, -(mcp.x - wrist.x))
 
@@ -195,10 +208,16 @@ export default function HandLayer({ surface }: Props) {
         state.fistHold = fistCond ? state.fistHold + 1 : 0
         if (
           !state.fist &&
-          !state.pinched &&
           state.cooldown === 0 &&
           state.fistHold >= FIST_FRAMES
         ) {
+          // the fist outranks a pinch: an in-flight stroke is released so
+          // the wheel can always be summoned
+          if (state.pinched) {
+            state.pinched = false
+            state.pinchHold = 0
+            surface.current?.strokeEnd(id)
+          }
           state.fist = true
           state.fistHold = 0
           state.menuAngle = roll
@@ -281,6 +300,7 @@ export default function HandLayer({ surface }: Props) {
         if (
           !state.pinched &&
           state.cooldown === 0 &&
+          restSpread > REST_OPEN &&
           state.pinchHold >= PINCH_FRAMES
         ) {
           state.pinched = true
