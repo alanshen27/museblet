@@ -61,7 +61,7 @@ interface Particle {
   life: number
   decay: number
   color: string
-  kind?: 'spark' | 'chalk' | 'drop'
+  kind?: 'spark' | 'chalk' | 'drop' | 'ash'
 }
 
 // a firework dab: a blob that swells, then bursts into sparks
@@ -422,6 +422,25 @@ export default function DrawSurface({
     }
   }
 
+  // snap dust: eaten stroke ends crumble into motes that drift up and
+  // scatter on the wind like ash
+  const spawnAsh = (x: number, y: number, color: string) => {
+    const n = 1 + Math.floor(Math.random() * 2)
+    for (let i = 0; i < n; i++) {
+      particles.current.push({
+        x: x + (Math.random() - 0.5) * 8,
+        y: y + (Math.random() - 0.5) * 8,
+        vx: 0.3 + Math.random() * 0.7,
+        vy: -(0.2 + Math.random() * 0.6),
+        size: 0.8 + Math.random() * 2.2,
+        life: 1,
+        decay: 0.012 + Math.random() * 0.012,
+        color: Math.random() < 0.2 ? '#efe9dd' : color,
+        kind: 'ash',
+      })
+    }
+  }
+
   // rain: drops falling from the stroke, splashing as they die
   const spawnDrop = (x: number, y: number, color: string) => {
     particles.current.push({
@@ -703,7 +722,12 @@ export default function DrawSurface({
     if (frameCount.current % 4 === 0) {
       for (const s of strokesRef.current) {
         if (!activeSet.has(s) && s.points.length > 0) {
-          s.points.shift()
+          const eaten = s.points.shift()
+          if (eaten) {
+            const pen = getPen(s.pen)
+            const c = s.hue ? shiftHue(pen.color, s.hue) : pen.color
+            spawnAsh(eaten.x * w, eaten.y * h, c)
+          }
         }
       }
     }
@@ -1079,6 +1103,12 @@ export default function DrawSurface({
         p.vy = p.vy * 0.92 + 0.015
       } else if (p.kind === 'drop') {
         p.vy += 0.06
+      } else if (p.kind === 'ash') {
+        // ash rides an updraft, wavering sideways as it climbs
+        p.vx += 0.008 + Math.sin(now / 240 + p.y * 0.05) * 0.02
+        p.vy -= 0.006
+        p.vx *= 0.985
+        p.vy *= 0.985
       } else {
         p.vy += 0.008
       }
