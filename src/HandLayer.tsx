@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   FilesetResolver,
   HandLandmarker,
@@ -24,6 +24,16 @@ const FINGER_TIPS = [8, 12, 16, 20]
 const REST_TIPS = [12, 16, 20] // middle/ring/pinky
 const WRIST = 0
 const MIDDLE_MCP = 9
+
+// bone chains for the dev-overlay skeleton
+const BONES = [
+  [0, 1, 2, 3, 4],
+  [0, 5, 6, 7, 8],
+  [5, 9, 10, 11, 12],
+  [9, 13, 14, 15, 16],
+  [13, 17, 18, 19, 20],
+  [0, 17],
+]
 
 // pinch hysteresis, as a fraction of palm size (wrist -> middle knuckle):
 // a tighter threshold so hovering fingers don't draw by accident
@@ -96,6 +106,20 @@ interface Props {
  */
 export default function HandLayer({ surface }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const debugRef = useRef<HTMLCanvasElement>(null)
+  // dev mode (press D): ghost the camera feed over the canvas with the
+  // tracked skeleton and live gesture numbers, to see what tracking sees
+  const [dev, setDev] = useState(false)
+  const devRef = useRef(dev)
+  devRef.current = dev
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'd' || e.key === 'D') setDev((v) => !v)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   useEffect(() => {
     const video = videoRef.current
@@ -115,7 +139,83 @@ export default function HandLayer({ surface }: Props) {
       surface.current?.setMenus([])
     }
 
+    // dev overlay: mirrored skeleton + gesture numbers over the ghosted feed
+    const drawDebug = (res: HandLandmarkerResult) => {
+      const cv = debugRef.current
+      if (!cv) return
+      const W = window.innerWidth
+      const H = window.innerHeight
+      if (cv.width !== W || cv.height !== H) {
+        cv.width = W
+        cv.height = H
+      }
+      const g = cv.getContext('2d')
+      if (!g) return
+      g.clearRect(0, 0, W, H)
+      // the crop region that maps to the full canvas
+      g.strokeStyle = 'rgba(240,235,220,0.35)'
+      g.setLineDash([6, 6])
+      g.lineWidth = 1
+      g.strokeRect(
+        CAM_MARGIN * W,
+        CAM_MARGIN * H,
+        (1 - 2 * CAM_MARGIN) * W,
+        (1 - 2 * CAM_MARGIN) * H,
+      )
+      g.setLineDash([])
+      res.landmarks.forEach((lm, hand) => {
+        const px = (i: number) => (1 - lm[i].x) * W
+        const py = (i: number) => lm[i].y * H
+        g.strokeStyle = 'rgba(120,220,160,0.9)'
+        g.lineWidth = 2
+        for (const chain of BONES) {
+          g.beginPath()
+          g.moveTo(px(chain[0]), py(chain[0]))
+          for (let i = 1; i < chain.length; i++) g.lineTo(px(chain[i]), py(chain[i]))
+          g.stroke()
+        }
+        g.fillStyle = '#f3efe4'
+        for (let i = 0; i < lm.length; i++) {
+          g.beginPath()
+          g.arc(px(i), py(i), i === THUMB_TIP || i === INDEX_TIP ? 5 : 3, 0, Math.PI * 2)
+          g.fill()
+        }
+        const s = hands.get(hand)
+        if (!s) return
+        const wrist = lm[WRIST]
+        const mcp = lm[MIDDLE_MCP]
+        const palm = Math.hypot(wrist.x - mcp.x, wrist.y - mcp.y) || 1
+        const pinch =
+          Math.hypot(lm[INDEX_TIP].x - lm[THUMB_TIP].x, lm[INDEX_TIP].y - lm[THUMB_TIP].y) / palm
+        const spread =
+          FINGER_TIPS.reduce(
+            (sum, i) => sum + Math.hypot(lm[i].x - wrist.x, lm[i].y - wrist.y),
+            0,
+          ) /
+          (4 * palm)
+        const lines = [
+          `hand ${hand}  ${s.fist ? 'FIST/wheel' : s.pinched ? 'DRAWING' : 'idle'}`,
+          `pinch ${pinch.toFixed(2)} (on<${PINCH_ON} off>${PINCH_OFF})`,
+          `spread ${spread.toFixed(2)} (fist<${FIST_ON} open>${FIST_OFF})`,
+          `pen ${PENS[s.pen].id}  sel ${PENS[s.menuSel].id}  cooldown ${s.cooldown}`,
+        ]
+        g.font = '12px monospace'
+        g.textBaseline = 'top'
+        const tx = px(WRIST) + 16
+        const ty = py(WRIST) + 8
+        g.fillStyle = 'rgba(0,0,0,0.55)'
+        g.fillRect(tx - 4, ty - 4, 250, lines.length * 15 + 8)
+        g.fillStyle = '#d9f2e2'
+        lines.forEach((l, i) => g.fillText(l, tx, ty + i * 15))
+      })
+    }
+
     const onFrame = (res: HandLandmarkerResult) => {
+      if (devRef.current) drawDebug(res)
+      else {
+        const cv = debugRef.current
+        cv?.getContext('2d')?.clearRect(0, 0, cv.width, cv.height)
+      }
       const cursors: SurfaceCursor[] = []
       const menus: SurfaceMenu[] = []
       const seen = new Set<number>()
@@ -406,19 +506,46 @@ export default function HandLayer({ surface }: Props) {
     }
   }, [surface])
 
-  // hidden camera feed: only the projected dots are visible on the surface
+  // camera feed is hidden in normal use; dev mode (D) ghosts it over the
+  // room, mirrored to match the canvas, with the skeleton overlay on top
   return (
-    <video
-      ref={videoRef}
-      muted
-      playsInline
-      style={{
-        position: 'fixed',
-        width: 1,
-        height: 1,
-        opacity: 0,
-        pointerEvents: 'none',
-      }}
-    />
+    <>
+      <video
+        ref={videoRef}
+        muted
+        playsInline
+        style={
+          dev
+            ? {
+                position: 'fixed',
+                inset: 0,
+                width: '100vw',
+                height: '100vh',
+                objectFit: 'fill',
+                transform: 'scaleX(-1)',
+                opacity: 0.3,
+                pointerEvents: 'none',
+                zIndex: 40,
+              }
+            : {
+                position: 'fixed',
+                width: 1,
+                height: 1,
+                opacity: 0,
+                pointerEvents: 'none',
+              }
+        }
+      />
+      <canvas
+        ref={debugRef}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          pointerEvents: 'none',
+          zIndex: 41,
+          display: dev ? 'block' : 'none',
+        }}
+      />
+    </>
   )
 }
