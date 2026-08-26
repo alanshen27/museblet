@@ -19,6 +19,8 @@ export interface SurfaceCursor {
   active: boolean
   /** 0..1 pinch closeness — how near this finger is to activating */
   strength?: number
+  /** pointer id, so note pulses can find this cursor */
+  id?: number
   /** thumbs render as the anchor/activation point */
   kind?: 'tip' | 'thumb'
 }
@@ -40,6 +42,8 @@ export interface DrawHandle {
   strokeCancel: (id: number) => void
   setCursors: (cursors: SurfaceCursor[]) => void
   setMenus: (menus: SurfaceMenu[]) => void
+  /** throb the cursor orb of a pointer in time with a played note */
+  notePulse: (id: number, strength?: number) => void
 }
 
 interface Props {
@@ -48,7 +52,7 @@ interface Props {
   playheadX: number | null // 0..1 while playing
   penId: string
   onDrawPoint?: (pointerId: number, penId: string, p: DrawPoint) => void
-  onDrawEnd?: (pointerId: number) => void
+  onDrawEnd?: (pointerId: number, path?: DrawPoint[], penId?: string) => void
   handleRef?: React.RefObject<DrawHandle | null>
 }
 
@@ -337,8 +341,12 @@ export default function DrawSurface({
   onDrawPointRef.current = onDrawPoint
   const onDrawEndRef = useRef(onDrawEnd)
   onDrawEndRef.current = onDrawEnd
+  // full (un-eaten) path of each in-flight stroke, for gesture reading
+  const gesturePaths = useRef(new Map<number, { pen: string; pts: DrawPoint[] }>())
   // projected cursor dots (tracked fingertips hovering over the surface)
   const cursors = useRef<SurfaceCursor[]>([])
+  // recent note hits per pointer id, so the fingertip beats with the music
+  const notePulses = useRef(new Map<number, { t: number; s: number }>())
   // radial pen wheels summoned by a fist
   const menus = useRef<SurfaceMenu[]>([])
   const playheadRef = useRef(playheadX)
@@ -1186,7 +1194,19 @@ export default function DrawSurface({
         continue
       }
       const s = c.strength ?? 0
-      const r = c.active ? 26 : (14 + s * 8) * pulse
+      // beat envelope: the orb throbs on every note this finger plays
+      const np = c.id !== undefined ? notePulses.current.get(c.id) : undefined
+      const beat = np ? Math.max(0, 1 - (now - np.t) / 350) * np.s : 0
+      const r = (c.active ? 26 : (14 + s * 8) * pulse) * (1 + beat * 0.7)
+      if (np && beat > 0) {
+        // a ripple ring expands away from the orb as the note decays
+        g.globalAlpha = beat * 0.55
+        g.strokeStyle = '#fffaf0'
+        g.lineWidth = 1.4
+        g.beginPath()
+        g.arc(cx, cy, r + (1 - beat) * 46, 0, Math.PI * 2)
+        g.stroke()
+      }
       // aura + hot core
       softMote(g, cx, cy, r * 2.2, c.color, (c.active ? 0.35 : 0.15) + s * 0.15, 0.15)
       softMote(g, cx, cy, r, c.color, c.active ? 1 : 0.55 + s * 0.3)
@@ -1332,6 +1352,7 @@ export default function DrawSurface({
         bornAt: performance.now(),
         hue: Math.random() * 360,
       }
+      gesturePaths.current.set(id, { pen: pid, pts: [p0] })
       activeStrokes.current.set(id, stroke)
       onStrokesChangeRef.current([...strokesRef.current, stroke])
     },
@@ -1341,6 +1362,10 @@ export default function DrawSurface({
   const strokeMove = useCallback((id: number, pid: string, p: DrawPoint) => {
     const stroke = activeStrokes.current.get(id)
     if (!stroke) return
+    // the rendered trail is tail-eaten, so the full path for gesture
+    // reading is kept separately
+    const gp = gesturePaths.current.get(id)
+    if (gp && gp.pts.length < 1200) gp.pts.push(p)
     stroke.points.push(p)
     while (stroke.points.length > TRAIL_POINTS) stroke.points.shift()
     stroke.bornAt = performance.now()
@@ -1364,13 +1389,16 @@ export default function DrawSurface({
   }, [])
 
   const strokeEnd = useCallback((id: number) => {
+    const gp = gesturePaths.current.get(id)
+    gesturePaths.current.delete(id)
     activeStrokes.current.delete(id)
     pointerState.current.delete(id)
-    onDrawEndRef.current?.(id)
+    onDrawEndRef.current?.(id, gp?.pts, gp?.pen)
   }, [])
 
   const strokeCancel = useCallback((id: number) => {
     const stroke = activeStrokes.current.get(id)
+    gesturePaths.current.delete(id)
     activeStrokes.current.delete(id)
     pointerState.current.delete(id)
     if (stroke) {
@@ -1391,6 +1419,9 @@ export default function DrawSurface({
       },
       setMenus: (m) => {
         menus.current = m
+      },
+      notePulse: (id, strength = 1) => {
+        notePulses.current.set(id, { t: performance.now(), s: strength })
       },
     }
     return () => {

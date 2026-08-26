@@ -316,7 +316,7 @@ export default function HandLayer({ surface }: Props) {
           if (state.pinched) {
             state.pinched = false
             state.pinchHold = 0
-            surface.current?.strokeEnd(id)
+            surface.current?.strokeCancel(id)
           }
           state.fist = true
           state.fistHold = 0
@@ -418,6 +418,7 @@ export default function HandLayer({ surface }: Props) {
         cursors.push({
           x,
           y,
+          id,
           color: PENS[state.pen].color,
           active: state.pinched,
           // how close this finger is to activating (ring contracts)

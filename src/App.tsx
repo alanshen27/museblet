@@ -5,6 +5,7 @@ import { glideStop, glideTo, playNote } from './audio'
 import { bindInlet, isMax, outletMessage, outletNote } from './max'
 import { SCALES, strokesToNotes, type NoteEvent, type Stroke } from './music'
 import { chordAt, snapToChord } from './harmony'
+import { classifyStroke, type Gesture } from './gestures'
 import { type PenId } from './pens'
 // PENS import is only needed by the commented-out dock
 // import { PENS, type PenId } from './pens'
@@ -50,6 +51,10 @@ export default function App() {
   // eighth-note grid so it feels composed rather than glissando.
   const liveRef = useRef({ t: 0, midi: -1, step: 0 })
   const lastDrawRef = useRef(0)
+  // hold detection: a pen parked in one spot becomes a pulsing lead
+  const holdRef = useRef(
+    new Map<number, { x: number; y: number; since: number; step: number; lastT: number }>(),
+  )
   const tempoRef = useRef(tempo)
   tempoRef.current = tempo
   const barMs = () => (60000 / tempoRef.current) * 2
@@ -65,6 +70,50 @@ export default function App() {
     ) => {
       const now = performance.now()
       lastDrawRef.current = now
+      // pulsing lead: parking the pen turns wandering ambience into a
+      // rhythmic throb on chord tones — dotted pattern, swelling as the
+      // hold goes on, the fingertip orb beating with every hit
+      const hold = holdRef.current.get(pointerId) ?? {
+        x: p.x,
+        y: p.y,
+        since: now,
+        step: 0,
+        lastT: 0,
+      }
+      if (Math.hypot(p.x - hold.x, p.y - hold.y) > 0.03) {
+        hold.x = p.x
+        hold.y = p.y
+        hold.since = now
+        hold.step = 0
+      }
+      holdRef.current.set(pointerId, hold)
+      if (now - hold.since > 450) {
+        const gap16 = barMs() / 16
+        if (now - hold.lastT >= gap16) {
+          hold.lastT = now
+          // dotted 16th pattern over chord degrees; -1 = rest.
+          // reads as a lead line, not a metronome
+          const PATTERN = [0, -1, 2, 0, -1, 3, 1, -1, 2, -1, 0, 3, 1, -1, 2, -1]
+          const slot = hold.step++ % PATTERN.length
+          const deg = PATTERN[slot]
+          if (deg >= 0) {
+            const chord = chordAt(scaleRef.current, chordIndex(now))
+            const register = Math.round((1 - p.y) * 2)
+            const midi =
+              chord[deg % chord.length] + register * 12 + (deg >= chord.length ? 12 : 0)
+            const swell = Math.min(1, (now - hold.since) / 4000)
+            const velocity = Math.round(
+              18 + p.pressure * 26 + swell * 36 + (slot === 0 ? 14 : 0),
+            )
+            emit({ timeMs: 0, pen, midi, velocity, durationMs: gap16 * 1.7 })
+            surfaceHandle.current?.notePulse(
+              pointerId,
+              0.4 + swell * 0.4 + (slot === 0 ? 0.2 : 0),
+            )
+          }
+        }
+        return
+      }
       const live = liveRef.current
       const energyNow = Math.min(1, p.speed * 1.1)
       // continuous gesture voice (browser mode): one sustained tone per
@@ -111,6 +160,7 @@ export default function App() {
       )
       const durationMs = gap * 1.8 + 200
       emit({ timeMs: 0, pen, midi, velocity, durationMs })
+      surfaceHandle.current?.notePulse(pointerId, 0.3 + energy * 0.4)
       // memory echoes: each phrase softly re-sings itself a bar later and
       // again two bars on — a fading canon of what the hand just played,
       // re-snapped to whatever chord holds when the echo lands
@@ -133,9 +183,133 @@ export default function App() {
     [emit, inMax],
   )
 
-  const onDrawEnd = useCallback((pointerId: number) => {
-    glideStop(pointerId)
-  }, [])
+  // the drawing language: a finished mark is read as a musical word and
+  // answered with a phrase — shapes mean something, not just where the
+  // hand happened to wander
+  const playPhrase = useCallback(
+    (gst: Gesture, pen: string, pointerId: number) => {
+      const eighth = () => barMs() / 8
+      const sixteenth = () => barMs() / 16
+      // y places the register: higher on screen = higher notes
+      const regMidi = (y: number) => 48 + Math.round((1 - y) * 24)
+      const schedule = (
+        delay: number,
+        midi: number,
+        velocity: number,
+        durationMs: number,
+        pulse = 0,
+      ) => {
+        window.setTimeout(() => {
+          const c = chordAt(scaleRef.current, chordIndex(performance.now()))
+          emit({
+            timeMs: 0,
+            pen,
+            midi: snapToChord(midi, c),
+            velocity,
+            durationMs,
+          })
+          if (pulse > 0) surfaceHandle.current?.notePulse(pointerId, pulse)
+        }, delay)
+      }
+      const vel = Math.round(40 + gst.avgPressure * 40)
+      switch (gst.shape) {
+        case 'dot': {
+          // a tap is an accent: one bright hit with a sub-octave shadow
+          schedule(0, regMidi(gst.midY), vel + 30, eighth() * 2, 1)
+          schedule(0, regMidi(gst.midY) - 12, Math.round(vel * 0.5), eighth() * 2)
+          break
+        }
+        case 'line': {
+          // a level stroke is a drone: root + fifth + sub held two bars
+          const root = regMidi(gst.midY)
+          schedule(0, root, 26, barMs() * 2, 0.6)
+          schedule(0, root + 7, 18, barMs() * 2)
+          schedule(0, root - 12, 22, barMs() * 2)
+          break
+        }
+        case 'rise':
+        case 'fall': {
+          // a climbing/descending stroke is a lead run between its own
+          // endpoints — syncopated skips and an octave pop at the top,
+          // not a straight scale ladder; drawing speed sets the rate
+          const n = Math.max(5, Math.min(9, Math.round(gst.length * 12)))
+          const from = regMidi(gst.y0)
+          const to = regMidi(gst.y1)
+          const SKIP = [0, 4, 2, 7, 5, 9, 7, 12, 11]
+          const fast = gst.avgSpeed > 0.6
+          let t = 0
+          for (let i = 0; i < n; i++) {
+            const frac = i / (n - 1)
+            const base = from + (to - from) * frac
+            const midi = Math.round(base) + (SKIP[i % SKIP.length] % 5) - 2
+            const accent = i === 0 || i === n - 1
+            schedule(
+              t,
+              i === n - 1 ? to + (gst.shape === 'rise' ? 12 : -12) : midi,
+              accent ? vel + 24 : vel,
+              eighth() * 1.6,
+              accent ? 1 : 0.5,
+            )
+            // swung timing: long-short pairs
+            t += (fast ? sixteenth() : eighth()) * (i % 2 === 0 ? 1.3 : 0.7)
+          }
+          break
+        }
+        case 'circle': {
+          // a closed loop is an ostinato: a four-note motif cycling three
+          // times, accented on the one, last note held
+          const root = regMidi(gst.midY)
+          const MOTIF = [0, 7, 3, 10]
+          let t = 0
+          for (let cycle = 0; cycle < 3; cycle++) {
+            for (let i = 0; i < MOTIF.length; i++) {
+              const last = cycle === 2 && i === MOTIF.length - 1
+              schedule(
+                t,
+                root + MOTIF[i],
+                i === 0 ? vel + 20 : vel - 6,
+                last ? barMs() : eighth() * 1.4,
+                i === 0 ? 0.9 : 0.4,
+              )
+              t += eighth()
+            }
+          }
+          break
+        }
+        case 'zigzag': {
+          // switchbacks are rhythm: eight driving sixteenths alternating
+          // root and fifth with a 3-3-2 accent pattern
+          const root = regMidi(gst.midY)
+          const ACCENT = [1, 0, 0, 1, 0, 0, 1, 0]
+          for (let i = 0; i < 8; i++) {
+            schedule(
+              i * sixteenth(),
+              i % 2 === 0 ? root : root + 7,
+              ACCENT[i] ? vel + 26 : vel - 10,
+              sixteenth() * 1.5,
+              ACCENT[i] ? 0.9 : 0.35,
+            )
+          }
+          break
+        }
+      }
+    },
+    [emit],
+  )
+
+  const onDrawEnd = useCallback(
+    (
+      pointerId: number,
+      path?: { x: number; y: number; pressure: number; speed: number }[],
+      pen?: string,
+    ) => {
+      glideStop(pointerId)
+      holdRef.current.delete(pointerId)
+      if (!path || path.length < 2 || !pen) return
+      playPhrase(classifyStroke(path), pen, pointerId)
+    },
+    [playPhrase],
+  )
 
   // hand tracking: on by default. Camera-tracked fingertips as input
   // (touch/mouse stay as fallback). Dock ✋ toggle is with the bottom bar.
