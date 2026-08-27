@@ -130,3 +130,37 @@ main {
   background: #0a0908;
   color: #e8e3d8;
 }
+
+/* the piece: section label + progress, faint in the corner of the room */
+.piece-hud {
+  position: fixed;
+  top: 18px;
+  right: 22px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+  z-index: 30;
+}
+
+.piece-hud-label {
+  color: rgba(232, 227, 216, 0.4);
+  font-size: 0.8rem;
+  letter-spacing: 0.25em;
+}
+
+.piece-hud-bar {
+  width: 90px;
+  height: 2px;
+  background: rgba(232, 227, 216, 0.12);
+  border-radius: 1px;
+  overflow: hidden;
+  display: block;
+}
+
+.piece-hud-fill {
+  display: block;
+  height: 100%;
+  background: rgba(232, 227, 216, 0.35);
+  transition: width 0.25s linear;
+}

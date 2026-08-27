@@ -80,6 +80,7 @@ interface HandState {
   speed: number
   sx: number // smoothed index-tip position
   sy: number
+  sz: number // smoothed depth (palm size in frame: near = big = 1)
   glitch: number // consecutive frames rejected as tracking glitches
   pen: number // index into PENS
   fist: boolean
@@ -244,6 +245,7 @@ export default function HandLayer({ surface }: Props) {
           speed: 0,
           sx: rawX,
           sy: rawY,
+          sz: 0.5,
           glitch: 0,
           pen: hand % PENS.length,
           fist: false,
@@ -388,7 +390,11 @@ export default function HandLayer({ surface }: Props) {
           1,
           Math.max(0.15, (PINCH_OFF - pinchDist) / (PINCH_OFF - 0.15)),
         )
-        const p: DrawPoint = { x, y, pressure, speed: state.speed }
+        // depth (Z axis of the 3D space): the tracked hand's size in the
+        // frame — palm span grows as the hand nears the camera
+        const zRaw = Math.min(1, Math.max(0, (palm - 0.06) / 0.22))
+        state.sz += (zRaw - state.sz) * 0.15
+        const p: DrawPoint = { x, y, pressure, speed: state.speed, z: state.sz }
         const pen = PENS[state.pen].id
 
         // debounced pinch: must hold for a few frames so a finger briefly

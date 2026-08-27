@@ -9,6 +9,8 @@ export interface DrawPoint {
   y: number
   pressure: number
   speed: number // normalized units per second
+  /** depth: 0 = far from camera, 1 = near (tracked hand size) */
+  z?: number
 }
 
 /** a floating cursor projected onto the surface (e.g. a tracked fingertip) */
