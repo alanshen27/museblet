@@ -157,9 +157,9 @@ interface Dust {
 
 // strokes settle, linger as ghosts, then dissolve to make way for new marks
 const SETTLE_MS = 3000
-const GHOST_ALPHA = 0.35
-const LINGER_MS = 5000
-const DISSOLVE_MS = 3000
+const GHOST_ALPHA = 0.45
+const LINGER_MS = 14000
+const DISSOLVE_MS = 6000
 
 interface Pt {
   x: number
@@ -287,7 +287,7 @@ const smoothCache = new WeakMap<
 
 // comet trail: while drawing, the stroke's tail is eaten away so only a
 // ribbon of this many points follows the hand
-const TRAIL_POINTS = 70
+const TRAIL_POINTS = 150
 
 // aurora curtains: wide muted glows in the room's own gold/jade palette
 const AURORA = [
@@ -563,14 +563,14 @@ export default function DrawSurface({
           const grad = gg.createRadialGradient(cx, cy, 0, cx, cy, rr)
           grad.addColorStop(0, cl.c)
           grad.addColorStop(1, `${cl.c}00`)
-          gg.globalAlpha = 0.05
+          gg.globalAlpha = 0.08
           gg.fillStyle = grad
           gg.fillRect(0, 0, gw, gh)
         }
         // grain rain: specks streaming down noise-displaced columns, the
         // displacement wobbling over time like a TD noise TOP
         gg.globalAlpha = 0.5
-        for (let i = 0; i < 220; i++) {
+        for (let i = 0; i < 380; i++) {
           const r1 = Math.sin(i * 127.1 + Math.floor(t * 9) * 311.7) * 43758.5453
           const f1 = r1 - Math.floor(r1)
           const r2 = Math.sin(i * 269.5 + Math.floor(t * 9) * 183.3) * 28001.83
@@ -579,9 +579,11 @@ export default function DrawSurface({
             (f1 + 0.08 * Math.sin(t * 0.7 + f2 * 12 + f1 * 5)) * gw
           const gy = ((f2 + t * 0.045) % 1) * gh
           const warm = f1 * 3 % 1 < 0.55
-          gg.fillStyle = warm ? '#8a6f3c' : '#4d6b5c'
-          gg.globalAlpha = 0.05 + f2 * 0.16
-          gg.fillRect(gx, gy, 1, 1 + f1 * 2)
+          // a few white-hot embers ride the rain so the field sparkles
+          const hot = (f1 * 7) % 1 < 0.06
+          gg.fillStyle = hot ? '#e8dcc0' : warm ? '#8a6f3c' : '#4d6b5c'
+          gg.globalAlpha = hot ? 0.2 + f2 * 0.25 : 0.05 + f2 * 0.16
+          gg.fillRect(gx, gy, 1, 1 + f1 * (hot ? 4 : 2))
         }
         // the field answers the hands: cursors and live stroke tips pour
         // energy into the feedback buffer, so light bleeds and smears
@@ -615,11 +617,14 @@ export default function DrawSurface({
       // blit up, soft-blurred, additively — grain becomes breathing haze
       g.save()
       g.globalCompositeOperation = 'lighter'
-      g.globalAlpha = 0.45
+      g.globalAlpha = 0.55
       g.filter = 'blur(1px)'
       g.imageSmoothingEnabled = true
       g.drawImage(cv, 0, 0, w, h)
+      // a second crisp pass keeps the sparkle the blur washes out
+      g.globalAlpha = 0.18
       g.filter = 'none'
+      g.drawImage(cv, 0, 0, w, h)
       g.restore()
     }
 
@@ -900,7 +905,7 @@ export default function DrawSurface({
     // slowly, so the mark lingers instead of blinking out
     frameCount.current++
     const activeSet = new Set(activeStrokes.current.values())
-    if (frameCount.current % 4 === 0) {
+    if (frameCount.current % 8 === 0) {
       for (const s of strokesRef.current) {
         if (!activeSet.has(s) && s.points.length > 0) {
           const eaten = s.points.shift()
@@ -947,7 +952,7 @@ export default function DrawSurface({
       const pool = g.createRadialGradient(cx, cy, 0, cx, cy, reach)
       pool.addColorStop(0, cGlow)
       pool.addColorStop(1, 'rgba(0,0,0,0)')
-      g.globalAlpha = 0.1 * baseAlpha
+      g.globalAlpha = 0.16 * baseAlpha
       g.fillStyle = pool
       g.fillRect(cx - reach, cy - reach, reach * 2, reach * 2)
       g.globalAlpha = 1
@@ -1091,6 +1096,7 @@ export default function DrawSurface({
         const bolt = makeBolt(0, 34, 80)
         const bolt2 = makeBolt(57.31, 52, 110)
         const bolt3 = makeBolt(113.7, 22, 60)
+        const bolt4 = makeBolt(211.3, 78, 140)
         if (bolt.length > 2) {
           g.lineJoin = 'miter'
           g.lineCap = 'round'
@@ -1105,6 +1111,12 @@ export default function DrawSurface({
           // the main channel
           g.strokeStyle = cA
           g.shadowColor = cA
+          // farthest stray arc: a wide slow ghost that makes the braid
+          // feel like it owns the air around it
+          g.shadowBlur = 36
+          g.lineWidth = 3
+          g.globalAlpha = alpha * 0.16
+          drawPath(bolt4)
           g.shadowBlur = 24
           g.lineWidth = 2.2
           g.globalAlpha = alpha * 0.28
@@ -1113,9 +1125,9 @@ export default function DrawSurface({
           g.globalAlpha = alpha * 0.4
           drawPath(bolt3)
           // wide electric aura around the main bolt
-          g.shadowBlur = 30
-          g.lineWidth = 6
-          g.globalAlpha = alpha * 0.35
+          g.shadowBlur = 44
+          g.lineWidth = 8
+          g.globalAlpha = alpha * 0.4
           drawBolt()
           g.shadowBlur = 16
           g.lineWidth = 3.2
