@@ -12,6 +12,7 @@ import type {
 import { getPen } from './pens'
 import { setSummon, stopSummon, summonComplete } from './audio'
 import { HAND_GUIDE, SIGIL_PALE, sigilFor } from './sigils'
+import { Hand3DLayer, type HandFrame } from './Hand3D'
 
 const WASM_BASE =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm'
@@ -94,6 +95,10 @@ interface Props {
 export default function HandLayer({ surface }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
+  // the three.js layer: an existing rigged GLTF hand (the WebXR
+  // generic-hand model) whose bones follow the tracked joints
+  const glRef = useRef<HTMLCanvasElement>(null)
+  const hand3d = useRef<Hand3DLayer | null>(null)
   // dev mode (press D): ghost the camera feed over the canvas with the
   // gesture numbers, to see what tracking sees
   const [dev, setDev] = useState(false)
@@ -116,6 +121,9 @@ export default function HandLayer({ surface }: Props) {
     let raf = 0
     let stopped = false
     const hands = new Map<number, HandState>()
+    if (glRef.current && !hand3d.current) {
+      hand3d.current = new Hand3DLayer(glRef.current)
+    }
     // the awakening ritual: progress fills while a hand holds the circle
     const ritual = { done: false, hold: 0, glow: 0 }
 
@@ -257,7 +265,11 @@ export default function HandLayer({ surface }: Props) {
         g.restore()
       }
 
-      if (!res) return
+      if (!res) {
+        hand3d.current?.update([], W, H)
+        return
+      }
+      const frames: HandFrame[] = []
       res.landmarks.forEach((lm, hand) => {
         // anchor at the palm's canvas position, but keep the skeleton's
         // own geometry at true camera scale — mapping every joint through
@@ -282,32 +294,17 @@ export default function HandLayer({ surface }: Props) {
         g.beginPath()
         g.arc(ax, ay, palmR, 0, Math.PI * 2)
         g.fill()
-        // filament skeleton drawn as tapering candle-lit strokes: thick
-        // and warm at the palm, thinning to bright hairlines at the tips
-        g.lineCap = 'round'
-        g.shadowColor = pen.color
-        for (const chain of BONES) {
-          for (let i = 1; i < chain.length; i++) {
-            const f = i / (chain.length - 1)
-            g.strokeStyle = pen.color
-            g.shadowBlur = 10 - f * 5
-            g.lineWidth = 4.2 - f * 3
-            g.globalAlpha = (0.35 + 0.4 * (1 - f)) * dim
-            g.beginPath()
-            g.moveTo(px(chain[i - 1]), py(chain[i - 1]))
-            g.lineTo(px(chain[i]), py(chain[i]))
-            g.stroke()
-            // a bright hairline core over the soft stroke
-            g.strokeStyle = '#fff6e0'
-            g.shadowBlur = 0
-            g.lineWidth = 0.8
-            g.globalAlpha = 0.5 * dim
-            g.beginPath()
-            g.moveTo(px(chain[i - 1]), py(chain[i - 1]))
-            g.lineTo(px(chain[i]), py(chain[i]))
-            g.stroke()
-          }
-        }
+        // the bones themselves are worn by the 3D hand model — collect
+        // this hand's frame for the WebGL layer
+        frames.push({
+          lm,
+          handedness: res.handedness?.[hand]?.[0]?.categoryName ?? 'Right',
+          slot: hand,
+          ax,
+          ay,
+          scale: W * 0.72,
+          color: pen.color,
+        })
         // fingertips carry candle flames; other joints only faint motes
         for (let i = 0; i < lm.length; i++) {
           const tipish = i === THUMB_TIP || i === INDEX_TIP
@@ -334,6 +331,21 @@ export default function HandLayer({ surface }: Props) {
         g.restore()
 
         if (devRef.current && s) {
+          // dev skeleton: thin reference lines under the readouts
+          g.save()
+          g.strokeStyle = pen.color
+          g.globalAlpha = 0.4
+          g.lineWidth = 1
+          for (const chain of BONES) {
+            g.beginPath()
+            g.moveTo(px(chain[0]), py(chain[0]))
+            for (let i = 1; i < chain.length; i++)
+              g.lineTo(px(chain[i]), py(chain[i]))
+            g.stroke()
+          }
+          g.restore()
+        }
+        if (devRef.current && s) {
           const wrist = lm[WRIST]
           const mcp = lm[MIDDLE_MCP]
           const palm = Math.hypot(wrist.x - mcp.x, wrist.y - mcp.y) || 1
@@ -358,6 +370,7 @@ export default function HandLayer({ surface }: Props) {
           lines.forEach((l, i) => g.fillText(l, tx, ty + i * 15))
         }
       })
+      hand3d.current?.update(frames, W, H)
     }
 
     const onFrame = (res: HandLandmarkerResult) => {
@@ -601,6 +614,15 @@ export default function HandLayer({ surface }: Props) {
                 pointerEvents: 'none',
               }
         }
+      />
+      <canvas
+        ref={glRef}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          pointerEvents: 'none',
+          zIndex: 40,
+        }}
       />
       <canvas
         ref={overlayRef}
