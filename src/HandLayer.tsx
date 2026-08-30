@@ -376,7 +376,13 @@ export default function HandLayer({ surface }: Props) {
     }
 
     const onFrame = (res: HandLandmarkerResult) => {
-      drawOverlay(res)
+      // gestures first, visuals last: a rendering failure in the overlay
+      // or the WebGL hand must never block drawing input
+      try {
+        drawOverlay(res)
+      } catch (err) {
+        console.warn('hand overlay failed:', err)
+      }
       const cursors: SurfaceCursor[] = []
       const seen = new Set<number>()
       // the ritual: any hand hovering inside the summoning circle charges
@@ -510,7 +516,7 @@ export default function HandLayer({ surface }: Props) {
         })
       })
       if (!ritual.done) {
-        if (inCircle) {
+        if (inCircle || pointerInCircle()) {
           ritual.hold++
           setSummon(ritual.hold / RITUAL_FRAMES)
           if (ritual.hold >= RITUAL_FRAMES) {
@@ -537,6 +543,32 @@ export default function HandLayer({ surface }: Props) {
       surface.current?.setCursors(cursors)
     }
 
+    // mouse/touch fallback for the ritual: holding the pointer inside the
+    // summoning circle charges it too, so the instrument can awaken with
+    // no camera at all
+    let pointerPos: { x: number; y: number } | null = null
+    const onPtrDown = (e: PointerEvent) => {
+      pointerPos = { x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight }
+    }
+    const onPtrMove = (e: PointerEvent) => {
+      if (pointerPos)
+        pointerPos = { x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight }
+    }
+    const onPtrUp = () => {
+      pointerPos = null
+    }
+    window.addEventListener('pointerdown', onPtrDown)
+    window.addEventListener('pointermove', onPtrMove)
+    window.addEventListener('pointerup', onPtrUp)
+    window.addEventListener('pointercancel', onPtrUp)
+    const pointerInCircle = () => {
+      if (!pointerPos) return false
+      const guideR = Math.min(1, window.innerWidth / window.innerHeight)
+      const dx = (pointerPos.x - RITUAL_X) * (window.innerWidth / window.innerHeight)
+      const dy = pointerPos.y - RITUAL_Y
+      return Math.hypot(dx, dy) < 0.16 * guideR + 0.1
+    }
+
     let lastVideoTime = -1
     const loop = () => {
       if (stopped) return
@@ -555,6 +587,15 @@ export default function HandLayer({ surface }: Props) {
           drawOverlay(null)
         }
       } else if (!ritual.done) {
+        // no fresh camera frame: the pointer can still charge the ritual
+        if (pointerInCircle()) {
+          ritual.hold++
+          setSummon(ritual.hold / RITUAL_FRAMES)
+          if (ritual.hold >= RITUAL_FRAMES) {
+            ritual.done = true
+            summonComplete()
+          }
+        }
         // keep the summoning guide breathing even between camera frames
         drawOverlay(null)
       }
@@ -595,6 +636,10 @@ export default function HandLayer({ surface }: Props) {
 
     return () => {
       stopped = true
+      window.removeEventListener('pointerdown', onPtrDown)
+      window.removeEventListener('pointermove', onPtrMove)
+      window.removeEventListener('pointerup', onPtrUp)
+      window.removeEventListener('pointercancel', onPtrUp)
       cancelAnimationFrame(raf)
       endAll()
       landmarker?.close()

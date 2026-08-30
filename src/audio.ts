@@ -257,7 +257,12 @@ export function stopSummon() {
   s.osc2.stop(now + 2)
 }
 
+// the instrument stays silent until the summoning ritual completes
+let awakenedFlag = false
+export const isAwakened = () => awakenedFlag
+
 export function summonComplete() {
+  awakenedFlag = true
   stopSummon()
   // the awakening: a bell cascade sweeping down
   playBellTree([83, 79, 76, 71, 67, 64, 59], 70)
