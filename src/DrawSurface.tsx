@@ -3,7 +3,15 @@ import type { Stroke } from './music'
 import { getPen } from './pens'
 import { playExplosion } from './audio'
 import { getStrokeTexture } from './textures'
-import { SIGIL_GLYPHS, SIGIL_GOLD, SIGIL_JADE, SIGIL_PALE, sigilFor } from './sigils'
+import {
+  AURORA_GOLD,
+  AURORA_JADE,
+  SIGIL_GLYPHS,
+  SIGIL_GOLD,
+  SIGIL_JADE,
+  SIGIL_PALE,
+  sigilFor,
+} from './sigils'
 
 export interface DrawPoint {
   x: number
@@ -100,20 +108,7 @@ interface Dust {
   size: number
 }
 
-// a dot of the interactive field: anchored to a home position, pushed
-// away by nearby cursors/strokes and drifting on a noise map when idle
-interface FieldDot {
-  hx: number // home position (0..1 of canvas)
-  hy: number
-  ox: number // displacement from home, in px
-  oy: number
-  vx: number
-  vy: number
-  phase: number
-}
 
-const DOT_SPACING = 56 // px between field dots
-const DOT_PUSH_R = 150 // px radius within which a cursor disturbs dots
 
 // strokes settle, linger as ghosts, then dissolve to make way for new marks
 const SETTLE_MS = 3000
@@ -249,21 +244,12 @@ const smoothCache = new WeakMap<
 // ribbon of this many points follows the hand
 const TRAIL_POINTS = 70
 
-// topographic hills: drifting centres, each drawn as concentric contours
-const HILLS = [
-  { x: 0.22, y: 0.3, r: 0.34, rings: 7, driftX: 0.05, driftY: 0.034, phase: 0.7 },
-  { x: 0.74, y: 0.22, r: 0.26, rings: 6, driftX: 0.041, driftY: 0.052, phase: 2.3 },
-  { x: 0.55, y: 0.72, r: 0.4, rings: 8, driftX: 0.033, driftY: 0.045, phase: 4.1 },
-  { x: 0.12, y: 0.82, r: 0.22, rings: 5, driftX: 0.056, driftY: 0.038, phase: 5.5 },
-  { x: 0.9, y: 0.65, r: 0.28, rings: 6, driftX: 0.047, driftY: 0.029, phase: 1.6 },
-]
-
-// aurora curtains: wide muted-colour glows drifting slowly across the dark
+// aurora curtains: wide muted glows in the room's own gold/jade palette
 const AURORA = [
-  { y: 0.18, r: 0.5, color: '#3d5a52', alpha: 0.1, driftX: 0.05, driftY: 0.03, phase: 0.4 },
-  { y: 0.1, r: 0.6, color: '#4a3d5e', alpha: 0.08, driftX: 0.037, driftY: 0.021, phase: 2.1 },
-  { y: 0.3, r: 0.45, color: '#5e4a3d', alpha: 0.07, driftX: 0.028, driftY: 0.041, phase: 4.4 },
-  { y: 0.22, r: 0.55, color: '#3d4a5e', alpha: 0.09, driftX: 0.045, driftY: 0.026, phase: 5.6 },
+  { y: 0.18, r: 0.5, color: '#3a2e18', alpha: 0.1, driftX: 0.05, driftY: 0.03, phase: 0.4 },
+  { y: 0.1, r: 0.6, color: '#16281f', alpha: 0.08, driftX: 0.037, driftY: 0.021, phase: 2.1 },
+  { y: 0.3, r: 0.45, color: '#54401c', alpha: 0.06, driftX: 0.028, driftY: 0.041, phase: 4.4 },
+  { y: 0.22, r: 0.55, color: '#2e4a3c', alpha: 0.07, driftX: 0.045, driftY: 0.026, phase: 5.6 },
 ]
 
 // Catmull-Rom resampling: turns raw pointer points into a flowing curve
@@ -336,8 +322,6 @@ export default function DrawSurface({
   // colour clouds smear frame-over-frame and displaced grain rains
   // through them, blitted up soft-blurred behind everything
   const grainCv = useRef<HTMLCanvasElement | null>(null)
-  const fieldDots = useRef<FieldDot[]>([])
-  const fieldSize = useRef({ w: 0, h: 0 })
   const hover = useRef<{ x: number; y: number } | null>(null)
   const frameCount = useRef(0)
   const shoots = useRef<
@@ -563,18 +547,18 @@ export default function DrawSurface({
           sources.push({
             x: c.x,
             y: c.y,
-            a: c.active ? 0.28 : 0.08 + (c.strength ?? 0) * 0.1,
+            a: c.active ? 0.14 : 0.05 + (c.strength ?? 0) * 0.06,
             c: (c.id ?? 0) % 2 === 1 ? '#2e4a3c' : '#54401c',
           })
         }
         for (const s of activeStrokes.current.values()) {
           const p = s.points[s.points.length - 1]
-          if (p) sources.push({ x: p.x, y: p.y, a: 0.2, c: '#4a3a1a' })
+          if (p) sources.push({ x: p.x, y: p.y, a: 0.1, c: '#4a3a1a' })
         }
         for (const src of sources) {
           const sx = src.x * gw
           const sy = src.y * gh
-          const rr = gw * 0.14
+          const rr = gw * 0.07
           const grad = gg.createRadialGradient(sx, sy, 0, sx, sy, rr)
           grad.addColorStop(0, src.c)
           grad.addColorStop(1, `${src.c}00`)
@@ -586,7 +570,7 @@ export default function DrawSurface({
       // blit up, soft-blurred, additively — grain becomes breathing haze
       g.save()
       g.globalCompositeOperation = 'lighter'
-      g.globalAlpha = 0.85
+      g.globalAlpha = 0.6
       g.filter = 'blur(1.5px)'
       g.imageSmoothingEnabled = true
       g.drawImage(cv, 0, 0, w, h)
@@ -610,6 +594,20 @@ export default function DrawSurface({
       const cx = (0.5 + 0.42 * Math.sin(t0 * a.driftX + a.phase)) * w
       const cy = (a.y + 0.08 * Math.sin(t0 * a.driftY + a.phase * 2)) * h
       const breathe = 0.75 + 0.25 * Math.sin(t0 * 0.23 + a.phase * 3)
+      // AI-painted aurora ribbon (on black, additive) drifting as a
+      // looping curtain — slow scale/rotation sells the animation
+      const tex = sigilFor(i % 2 === 0 ? AURORA_GOLD : AURORA_JADE)
+      if (tex) {
+        const AW = w * (0.7 + 0.1 * Math.sin(t0 * 0.07 + a.phase))
+        const AH = AW * 0.5
+        g.save()
+        g.translate(cx, cy)
+        g.rotate(0.12 * Math.sin(t0 * 0.05 + a.phase * 2))
+        g.globalAlpha = a.alpha * breathe * 2.2
+        g.drawImage(tex, -AW / 2, -AH / 2, AW, AH)
+        g.restore()
+        continue
+      }
       const grad = g.createRadialGradient(cx, cy, 0, cx, cy, a.r * Math.min(w, h))
       grad.addColorStop(0, a.color)
       grad.addColorStop(1, `${a.color.slice(0, 7)}00`)
@@ -626,11 +624,11 @@ export default function DrawSurface({
     // milky-way band drifting diagonally through the dark
     {
       const band = g.createLinearGradient(0, h * 0.85, w, h * 0.15)
-      band.addColorStop(0, '#1a1e2e00')
-      band.addColorStop(0.42, '#232a4210')
-      band.addColorStop(0.5, '#2c355418')
-      band.addColorStop(0.58, '#232a4210')
-      band.addColorStop(1, '#1a1e2e00')
+      band.addColorStop(0, '#2a251a00')
+      band.addColorStop(0.42, '#332c1e10')
+      band.addColorStop(0.5, '#40362218')
+      band.addColorStop(0.58, '#332c1e10')
+      band.addColorStop(1, '#2a251a00')
       g.globalAlpha = 1
       g.fillStyle = band
       g.fillRect(0, 0, w, h)
@@ -647,7 +645,7 @@ export default function DrawSurface({
         }
         const tw = 0.5 + 0.5 * Math.sin(now / (420 + f1 * 700) + i * 1.9)
         g.globalAlpha = (0.04 + f2 * 0.14) * tw
-        g.fillStyle = i % 7 === 0 ? '#cfe0ff' : i % 11 === 0 ? '#ffe9c9' : '#f3efe4'
+        g.fillStyle = i % 7 === 0 ? '#e8dcc0' : i % 11 === 0 ? '#ffe9c9' : '#f3efe4'
         g.beginPath()
         g.arc(sx * w, sy * h, 0.5 + f1 * 1.3, 0, Math.PI * 2)
         g.fill()
@@ -690,73 +688,7 @@ export default function DrawSurface({
       }
       g.globalAlpha = 1
     }
-    // topographic map: little hills drawn as concentric contour rings,
-    // each ring wobbled by the height map so the contours read as terrain,
-    // the hills themselves drifting slowly through the room
-    {
-      g.lineCap = 'round'
-      for (let hIdx = 0; hIdx < HILLS.length; hIdx++) {
-        const hill = HILLS[hIdx]
-        const cx = (hill.x + 0.06 * Math.sin(t0 * hill.driftX + hill.phase)) * w
-        const cy = (hill.y + 0.05 * Math.cos(t0 * hill.driftY + hill.phase * 2)) * h
-        const maxR = hill.r * Math.min(w, h)
-        const breathe = 1 + 0.06 * Math.sin(t0 * 0.11 + hill.phase * 3)
-        for (let k = 1; k <= hill.rings; k++) {
-          const v = k / hill.rings
-          const radius = maxR * v * breathe
-          const col = k % 2 === 0 ? '#7189a6' : '#5d7492'
-          g.strokeStyle = col
-          // inner rings (the summit) glow a touch brighter
-          g.globalAlpha = 0.12 + 0.14 * (1 - v)
-          g.lineWidth = 1.7
-          g.beginPath()
-          const STEPS = 72
-          for (let i = 0; i <= STEPS; i++) {
-            const a = (i / STEPS) * Math.PI * 2
-            // organic contours: wobble the radius with the height map
-            const wob =
-              1 +
-              0.14 *
-                terrainH(
-                  Math.cos(a) * 0.6 + hIdx,
-                  Math.sin(a) * 0.6 + k * 0.37,
-                  t0 * 0.6 + hill.phase,
-                )
-            const x = cx + Math.cos(a) * radius * wob
-            const y = cy + Math.sin(a) * radius * wob
-            if (i === 0) g.moveTo(x, y)
-            else g.lineTo(x, y)
-          }
-          g.closePath()
-          g.stroke()
-        }
-      }
-    }
-    // interactive dot field: a grid of faint dots that scatter away from
-    // your cursor/fingertips as you move, and drift on a slowly wandering
-    // noise map when left alone
-    if (
-      fieldSize.current.w !== w ||
-      fieldSize.current.h !== h ||
-      fieldDots.current.length === 0
-    ) {
-      fieldSize.current = { w, h }
-      fieldDots.current = []
-      for (let gy = DOT_SPACING / 2; gy < h; gy += DOT_SPACING) {
-        for (let gx = DOT_SPACING / 2; gx < w; gx += DOT_SPACING) {
-          fieldDots.current.push({
-            hx: gx / w,
-            hy: gy / h,
-            ox: 0,
-            oy: 0,
-            vx: 0,
-            vy: 0,
-            phase: Math.random() * Math.PI * 2,
-          })
-        }
-      }
-    }
-    // things that disturb the field: hover pointer, hand cursors,
+    // things that disturb the room: hover pointer, hand cursors,
     // and the live tip of every active stroke
     const pokes: { x: number; y: number }[] = []
     if (hover.current) pokes.push({ x: hover.current.x * w, y: hover.current.y * h })
@@ -764,56 +696,6 @@ export default function DrawSurface({
     for (const s of activeStrokes.current.values()) {
       const p = s.points[s.points.length - 1]
       if (p) pokes.push({ x: p.x * w, y: p.y * h })
-    }
-    for (const d of fieldDots.current) {
-      const hx = d.hx * w
-      const hy = d.hy * h
-      let disturbed = 0
-      for (const p of pokes) {
-        const dx = hx + d.ox - p.x
-        const dy = hy + d.oy - p.y
-        const dist = Math.hypot(dx, dy)
-        if (dist < DOT_PUSH_R && dist > 0.001) {
-          const f = (1 - dist / DOT_PUSH_R) ** 2 * 2.2
-          d.vx += (dx / dist) * f
-          d.vy += (dy / dist) * f
-          disturbed = Math.max(disturbed, 1 - dist / DOT_PUSH_R)
-        }
-      }
-      // conjuring crushes space: dots inside a wide gravity well get
-      // dragged toward the rip instead of pushed away
-      for (const c of cursors.current) {
-        if (!c.active) continue
-        const dx = c.x * w - (hx + d.ox)
-        const dy = c.y * h - (hy + d.oy)
-        const dist = Math.hypot(dx, dy)
-        const GR = DOT_PUSH_R * 3
-        if (dist < GR && dist > 24) {
-          const f = (1 - dist / GR) ** 2 * 1.6
-          d.vx += (dx / dist) * f
-          d.vy += (dy / dist) * f
-          disturbed = Math.max(disturbed, (1 - dist / GR) * 0.8)
-        }
-      }
-      // idle: wander on a smooth noise map that itself drifts over time
-      const nx =
-        Math.sin(d.hx * 5.3 + t0 * 0.21 + d.phase) +
-        0.6 * Math.sin(d.hy * 8.1 - t0 * 0.13)
-      const ny =
-        Math.cos(d.hy * 4.7 - t0 * 0.17 + d.phase) +
-        0.6 * Math.cos(d.hx * 7.3 + t0 * 0.11)
-      d.vx += (nx * 9 - d.ox) * 0.004
-      d.vy += (ny * 9 - d.oy) * 0.004
-      d.vx *= 0.9
-      d.vy *= 0.9
-      d.ox += d.vx
-      d.oy += d.vy
-      const excite = Math.min(1, Math.hypot(d.vx, d.vy) / 3 + disturbed)
-      g.globalAlpha = 0.08 + excite * 0.34
-      g.fillStyle = excite > 0.25 ? '#8fa8c8' : '#5a6f8a'
-      g.beginPath()
-      g.arc(hx + d.ox, hy + d.oy, 1.1 + excite * 1.6, 0, Math.PI * 2)
-      g.fill()
     }
     // boids: a school of pale motes swimming through the dark, holding a
     // loose formation until a hand sweeps through and scatters them
@@ -881,14 +763,14 @@ export default function DrawSurface({
         b.y = (b.y + b.vy + h) % h
         // an elongated streak pointing along its heading
         g.globalAlpha = 0.34
-        g.strokeStyle = '#8fb0d4'
+        g.strokeStyle = '#c2b083'
         g.lineWidth = 1.3
         g.lineCap = 'round'
         g.beginPath()
         g.moveTo(b.x, b.y)
         g.lineTo(b.x - (b.vx / clamped) * 7, b.y - (b.vy / clamped) * 7)
         g.stroke()
-        softMote(g, b.x, b.y, 2.2, '#a8c4e4', 0.22)
+        softMote(g, b.x, b.y, 2.2, '#d8c9a0', 0.22)
       }
     }
     g.globalCompositeOperation = 'source-over'
@@ -1046,7 +928,7 @@ export default function DrawSurface({
         // tapered tips, wide confident body — a guiding gesture, not a scribble
         const taper = Math.pow(Math.sin(Math.PI * Math.min(1, t * 1.02)), 0.4)
         const thin = pen.tool === 'rain' ? 0.35 : 1
-        const half = ((18 + p.pressure * 52) * pen.lineWidth * taper * thin) / 2
+        const half = ((6 + p.pressure * 16) * pen.lineWidth * taper * thin) / 2
         left.push(p.x * w - dy * half, p.y * h + dx * half)
         right.push(p.x * w + dy * half, p.y * h - dx * half)
       }
@@ -1089,6 +971,96 @@ export default function DrawSurface({
       g.globalAlpha = alpha * 0.9
       trace()
       g.fill()
+
+      // the mark is living lightning: a jagged white-hot bolt crackling
+      // along the centreline, with electric ripple arcs and forked
+      // branches flickering off it
+      {
+        const flickFrame = Math.floor(now / 80)
+        const step = Math.max(1, Math.floor(n / 30))
+        const bolt: { x: number; y: number; nx: number; ny: number }[] = []
+        for (let i = 0; i < n; i += step) {
+          const p = pts[i]
+          const prev = pts[Math.max(0, i - step)]
+          const nxt = pts[Math.min(n - 1, i + step)]
+          let dx = (nxt.x - prev.x) * w
+          let dy = (nxt.y - prev.y) * h
+          const len = Math.hypot(dx, dy) || 1
+          dx /= len
+          dy /= len
+          const r1 = Math.sin(i * 91.7 + s.bornAt + flickFrame * 37.3) * 43758.5453
+          const f1 = r1 - Math.floor(r1)
+          const edge = Math.sin((Math.min(i, n - 1) / (n - 1)) * Math.PI)
+          const jag = (f1 - 0.5) * 16 * edge
+          bolt.push({
+            x: p.x * w - dy * jag,
+            y: p.y * h + dx * jag,
+            nx: -dy,
+            ny: dx,
+          })
+        }
+        bolt.push({ x: pts[n - 1].x * w, y: pts[n - 1].y * h, nx: 0, ny: 0 })
+        if (bolt.length > 2) {
+          g.lineJoin = 'miter'
+          g.lineCap = 'round'
+          const drawBolt = () => {
+            g.beginPath()
+            g.moveTo(bolt[0].x, bolt[0].y)
+            for (let i = 1; i < bolt.length; i++) g.lineTo(bolt[i].x, bolt[i].y)
+            g.stroke()
+          }
+          // electric aura around the bolt
+          g.strokeStyle = cA
+          g.shadowColor = cA
+          g.shadowBlur = 14
+          g.lineWidth = 2.6
+          g.globalAlpha = alpha * 0.5
+          drawBolt()
+          // the white-hot core
+          g.strokeStyle = '#fffdf5'
+          g.shadowBlur = 6
+          g.lineWidth = 1.1
+          g.globalAlpha = alpha * 0.95
+          drawBolt()
+          // forked branches: short two-segment arcs splitting off
+          g.lineWidth = 0.8
+          for (let i = 2; i < bolt.length - 2; i++) {
+            const r2 = Math.sin(i * 17.9 + s.bornAt + flickFrame * 11.7) * 28001.83
+            const f2 = r2 - Math.floor(r2)
+            if (f2 > 0.14) continue
+            const b0 = bolt[i]
+            const side = f2 > 0.07 ? 1 : -1
+            const L = 10 + f2 * 160
+            const mx = b0.x + b0.nx * side * L * 0.6 + (f2 - 0.07) * 90
+            const my = b0.y + b0.ny * side * L * 0.6
+            g.strokeStyle = cA
+            g.shadowColor = cA
+            g.shadowBlur = 8
+            g.globalAlpha = alpha * 0.6
+            g.beginPath()
+            g.moveTo(b0.x, b0.y)
+            g.lineTo(mx, my)
+            g.lineTo(mx + b0.nx * side * L * 0.5, my + b0.ny * side * L * 0.5 + 4)
+            g.stroke()
+          }
+          // techy ticks: tiny perpendicular hash marks riding the path,
+          // like data pulses streaming along a circuit trace
+          g.strokeStyle = cB
+          g.shadowBlur = 0
+          g.lineWidth = 1
+          for (let i = 1; i < bolt.length - 1; i += 3) {
+            const b0 = bolt[i]
+            const ph = (now / 260 + i * 0.7) % 1
+            g.globalAlpha = alpha * 0.5 * (0.3 + 0.7 * ph)
+            g.beginPath()
+            g.moveTo(b0.x - b0.nx * 5, b0.y - b0.ny * 5)
+            g.lineTo(b0.x + b0.nx * 5, b0.y + b0.ny * 5)
+            g.stroke()
+          }
+          g.lineJoin = 'round'
+          g.shadowBlur = 0
+        }
+      }
 
       // a little scene lives inside each stroke, chosen by its colour:
       // stars in blue marks, embers in warm ones, fireflies in green,
@@ -1140,9 +1112,9 @@ export default function DrawSurface({
             g.beginPath()
             g.arc(mx, my, 0.8 + f2 * 1.4, 0, Math.PI * 2)
             g.fill()
-            softMote(g, mx, my, 3 + f2 * 3, '#cfe0ff', alpha * tw * 0.35)
+            softMote(g, mx, my, 3 + f2 * 3, '#efe3c4', alpha * tw * 0.35)
           } else {
-            softMote(g, mx, my, 1 + f2 * 1.5, '#e8e3ff', alpha * tw * 0.22)
+            softMote(g, mx, my, 1 + f2 * 1.5, '#f0e9d6', alpha * tw * 0.22)
           }
         }
         for (let i = 3; i < n - 3; i += 9) {
@@ -1166,7 +1138,7 @@ export default function DrawSurface({
             g.moveTo(mx, my - sz)
             g.lineTo(mx, my + sz)
             g.stroke()
-            softMote(g, mx, my, sz * 1.6, '#cfe0ff', alpha * tw * 0.6)
+            softMote(g, mx, my, sz * 1.6, '#efe3c4', alpha * tw * 0.6)
           } else if (hueDeg < 65 || hueDeg >= 330) {
             // warm: embers rising slowly through the mark
             const rise = (now / 28 + i * 13) % 60
@@ -1464,8 +1436,8 @@ export default function DrawSurface({
         const outer = sigilFor(jade ? SIGIL_JADE : SIGIL_GOLD)
         const glyphs = sigilFor(SIGIL_GLYPHS)
         const disc = sigilFor(SIGIL_PALE)
-        // depth 0: a soft bloom of light welling up beneath the seal
-        softMote(g, cx, cy, R * 1.5, c.color, 0.16, 0.08)
+        // depth 0: a tight bloom of light welling up beneath the seal
+        softMote(g, cx, cy, R * 0.8, c.color, 0.08, 0.08)
         const layer = (
           img: HTMLImageElement | null,
           scale: number,
@@ -1615,8 +1587,8 @@ export default function DrawSurface({
       onDrawPointRef.current?.(id, pid, p0)
       // firework pen dabs: drop a blob, no stroke
       if (pen.tool === 'firework' && canvas) {
-        // every ball gets its own distinct colour
-        const tint = shiftHue(pen.color, Math.random() * 360)
+        // subtle per-ball variation within the pen's own colour family
+        const tint = shiftHue(pen.color, (Math.random() - 0.5) * 30)
         blobs.current.push({
           x: p0.x * canvas.width,
           y: p0.y * canvas.height,
@@ -1631,7 +1603,7 @@ export default function DrawSurface({
         points: [p0],
         pen: pid,
         bornAt: performance.now(),
-        hue: Math.random() * 360,
+        hue: (Math.random() - 0.5) * 24,
       }
       gesturePaths.current.set(id, { pen: pid, pts: [p0] })
       activeStrokes.current.set(id, stroke)
