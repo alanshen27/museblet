@@ -25,7 +25,7 @@ export interface Pen {
 export const PENS: Pen[] = [
   {
     id: 'neon',
-    name: 'Aurum',
+    name: 'Eldritch Seal',
     color: '#e8c47a',
     colorB: '#9a6a2f',
     glow: 'rgba(232,196,122,0.5)',
@@ -42,7 +42,7 @@ export const PENS: Pen[] = [
   },
   {
     id: 'pulse',
-    name: 'Rose',
+    name: 'Detonation Sigil',
     color: '#c98a94',
     colorB: '#6d3243',
     glow: 'rgba(201,138,148,0.45)',
@@ -59,7 +59,7 @@ export const PENS: Pen[] = [
   },
   {
     id: 'velvet',
-    name: 'Iris',
+    name: 'Deep Mantra',
     color: '#9d94c9',
     colorB: '#3d3a66',
     glow: 'rgba(157,148,201,0.4)',
@@ -76,7 +76,7 @@ export const PENS: Pen[] = [
   },
   {
     id: 'ember',
-    name: 'Umber',
+    name: 'Spark Ward',
     color: '#c97b4a',
     colorB: '#5e3220',
     glow: 'rgba(201,123,74,0.45)',
@@ -93,10 +93,10 @@ export const PENS: Pen[] = [
   },
   {
     id: 'crystal',
-    name: 'Pearl',
-    color: '#e9e6da',
-    colorB: '#9fa8b5',
-    glow: 'rgba(233,230,218,0.5)',
+    name: 'Chime Veil',
+    color: '#a9dcc0',
+    colorB: '#5f8f7a',
+    glow: 'rgba(169,220,192,0.5)',
     wave: 'sine',
     detune: 2,
     filterBase: 2000,

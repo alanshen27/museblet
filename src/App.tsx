@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import DrawSurface, { type DrawHandle } from './DrawSurface'
 import HandLayer from './HandLayer'
-import { glideStop, glideTo, playNote } from './audio'
+import { glideStop, glideTo, playBellTree, playNote } from './audio'
 import { bindInlet, isMax, outletMessage, outletNote } from './max'
 import { SCALES, strokesToNotes, type NoteEvent, type Stroke } from './music'
 import { chordAt, snapToChord } from './harmony'
@@ -109,7 +109,7 @@ export default function App() {
       // the 3D reading of the gesture
       const vol = Math.min(1, Math.max(0, 1 - p.y)) // Y: higher = louder
       const z = p.z ?? 0.5 // Z: hand size = depth
-      const midi = xToMidi(p.x, pf.slot === 0 ? 36 : 60) // X: pitch
+      const midi = xToMidi(p.x, pf.slot === 0 ? 31 : 53) // X: pitch
       const cutoff = 250 + z * 4200 // near = bright
       const wet = 0.2 + (1 - z) * 0.9 // far = sunk in reverb
       const fade = st.fade
@@ -121,7 +121,7 @@ export default function App() {
             pointerId,
             MAT_PEN.line,
             midi,
-            (0.02 + vol * 0.16) * fade,
+            (0.02 + vol * 0.12) * fade,
             cutoff,
             wet,
           )
@@ -131,7 +131,7 @@ export default function App() {
             timeMs: 0,
             pen: MAT_PEN.line,
             midi,
-            velocity: Math.round((16 + vol * 60) * fade),
+            velocity: Math.round((12 + vol * 46) * fade),
             durationMs: 700,
           })
         }
@@ -149,26 +149,39 @@ export default function App() {
           timeMs: 0,
           pen: MAT_PEN.point,
           midi,
-          velocity: Math.round((22 + vol * 74) * fade),
+          velocity: Math.round((18 + vol * 58) * fade),
           durationMs: 140,
         })
         surfaceHandle.current?.notePulse(pointerId, 0.5 + vol * 0.5)
         return
       }
 
-      // plane: a chord — several voices strummed together, re-rooted on
-      // the hand's X pitch and coloured by the current harmony
-      if (now - pf.lastHit < 620) return
+      // plane: a bell tree — the chord rippled top-down as a cascade of
+      // tiny chimes, like a hand sweeping through hanging bells
+      if (now - pf.lastHit < 900) return
       pf.lastHit = now
       const chord = chordAt(scaleRef.current, chordIndex(now))
       const root = snapToChord(midi, chord)
-      for (const [i, off] of [0, 4, 7, 11].entries()) {
-        emit({
-          timeMs: 0,
-          pen: MAT_PEN.plane,
-          midi: snapToChord(root + off, chord) + (i === 3 ? 12 : 0),
-          velocity: Math.round((12 + vol * 38) * fade * (i === 0 ? 1.2 : 0.8)),
-          durationMs: 1100,
+      const tones: number[] = []
+      for (const [i, off] of [16, 12, 7, 4, 0, -5].entries()) {
+        tones[i] = snapToChord(root + off, chord)
+      }
+      const velocity = Math.round((14 + vol * 42) * fade)
+      if (!inMax) {
+        playBellTree(tones, velocity)
+      } else {
+        tones.forEach((t, i) => {
+          setTimeout(
+            () =>
+              emit({
+                timeMs: 0,
+                pen: MAT_PEN.plane,
+                midi: t,
+                velocity,
+                durationMs: 500,
+              }),
+            i * 85,
+          )
         })
       }
       surfaceHandle.current?.notePulse(pointerId, 0.7 + vol * 0.3)
