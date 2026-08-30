@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import DrawSurface, { type DrawHandle } from './DrawSurface'
 import HandLayer from './HandLayer'
-import { glideStop, glideTo, playBellTree, playNote } from './audio'
+import { glideStop, glideTo, isAwakened, playBellTree, playNote } from './audio'
 import { bindInlet, isMax, outletMessage, outletNote } from './max'
 import { SCALES, strokesToNotes, type NoteEvent, type Stroke } from './music'
 import { chordAt, snapToChord } from './harmony'
@@ -95,6 +95,9 @@ export default function App() {
       _pen: string,
       p: { x: number; y: number; pressure: number; speed: number; z?: number },
     ) => {
+      // silent until the summoning ritual awakens the instrument — the
+      // piece clock must not start while the start screen is still up
+      if (!isAwakened()) return
       const now = performance.now()
       lastDrawRef.current = now
       if (pieceStartRef.current === null) pieceStartRef.current = now
