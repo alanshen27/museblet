@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { Stroke } from './music'
-import { getPen, PENS } from './pens'
+import { getPen } from './pens'
 import { playExplosion } from './audio'
 import { getStrokeTexture } from './textures'
 
@@ -25,14 +25,8 @@ export interface SurfaceCursor {
   id?: number
   /** thumbs render as the anchor/activation point */
   kind?: 'tip' | 'thumb'
-}
-
-/** a radial pen wheel summoned around an open palm */
-export interface SurfaceMenu {
-  x: number
-  y: number
-  /** index into PENS currently highlighted */
-  selected: number
+  /** tracked hand size (palm span, 0..~0.3 of frame) — scales the rune ring */
+  size?: number
 }
 
 /** imperative surface API so non-pointer sources (hand tracking) can draw */
@@ -43,7 +37,6 @@ export interface DrawHandle {
   /** drop an in-progress stroke without leaving ink (e.g. fist took over) */
   strokeCancel: (id: number) => void
   setCursors: (cursors: SurfaceCursor[]) => void
-  setMenus: (menus: SurfaceMenu[]) => void
   /** throb the cursor orb of a pointer in time with a played note */
   notePulse: (id: number, strength?: number) => void
 }
@@ -67,7 +60,16 @@ interface Particle {
   life: number
   decay: number
   color: string
-  kind?: 'spark' | 'chalk' | 'drop' | 'ash'
+  kind?: 'spark' | 'chalk' | 'drop' | 'ash' | 'fila'
+}
+
+// a boid of the background flock: drifting motes of the dark room that
+// school together and scatter when a hand sweeps through them
+interface Boid {
+  x: number
+  y: number
+  vx: number
+  vy: number
 }
 
 // a firework dab: a blob that swells, then bursts into sparks
@@ -328,6 +330,7 @@ export default function DrawSurface({
   const rings = useRef<Ring[]>([])
   const blobs = useRef<Blob_[]>([])
   const dust = useRef<Dust[]>([])
+  const boids = useRef<Boid[]>([])
   const fieldDots = useRef<FieldDot[]>([])
   const fieldSize = useRef({ w: 0, h: 0 })
   const hover = useRef<{ x: number; y: number } | null>(null)
@@ -349,8 +352,6 @@ export default function DrawSurface({
   const cursors = useRef<SurfaceCursor[]>([])
   // recent note hits per pointer id, so the fingertip beats with the music
   const notePulses = useRef(new Map<number, { t: number; s: number }>())
-  // radial pen wheels summoned by a fist
-  const menus = useRef<SurfaceMenu[]>([])
   const playheadRef = useRef(playheadX)
   const prevPlayheadRef = useRef<number | null>(null)
   playheadRef.current = playheadX
@@ -428,6 +429,26 @@ export default function DrawSurface({
         decay: 0.003 + Math.random() * 0.004,
         color,
         kind: 'chalk',
+      })
+    }
+  }
+
+  // granular energy filaments: short glowing hairs bristling off the
+  // stroke as it moves — the fuzzy charged look of an energy blade
+  const spawnFilament = (x: number, y: number, color: string) => {
+    for (let i = 0; i < 2; i++) {
+      const angle = Math.random() * Math.PI * 2
+      const speed = 0.8 + Math.random() * 2.6
+      particles.current.push({
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        size: 0.8 + Math.random() * 1.2,
+        life: 0.5 + Math.random() * 0.4,
+        decay: 0.035 + Math.random() * 0.03,
+        color,
+        kind: 'fila',
       })
     }
   }
@@ -589,8 +610,8 @@ export default function DrawSurface({
           const col = k % 2 === 0 ? '#7189a6' : '#5d7492'
           g.strokeStyle = col
           // inner rings (the summit) glow a touch brighter
-          g.globalAlpha = 0.07 + 0.1 * (1 - v)
-          g.lineWidth = 1.5
+          g.globalAlpha = 0.12 + 0.14 * (1 - v)
+          g.lineWidth = 1.7
           g.beginPath()
           const STEPS = 72
           for (let i = 0; i <= STEPS; i++) {
@@ -676,11 +697,87 @@ export default function DrawSurface({
       d.ox += d.vx
       d.oy += d.vy
       const excite = Math.min(1, Math.hypot(d.vx, d.vy) / 3 + disturbed)
-      g.globalAlpha = 0.05 + excite * 0.3
+      g.globalAlpha = 0.08 + excite * 0.34
       g.fillStyle = excite > 0.25 ? '#8fa8c8' : '#5a6f8a'
       g.beginPath()
       g.arc(hx + d.ox, hy + d.oy, 1.1 + excite * 1.6, 0, Math.PI * 2)
       g.fill()
+    }
+    // boids: a school of pale motes swimming through the dark, holding a
+    // loose formation until a hand sweeps through and scatters them
+    if (boids.current.length === 0 && w > 0) {
+      for (let i = 0; i < 46; i++) {
+        const a = Math.random() * Math.PI * 2
+        boids.current.push({
+          x: Math.random() * w,
+          y: Math.random() * h,
+          vx: Math.cos(a) * 1.2,
+          vy: Math.sin(a) * 1.2,
+        })
+      }
+    }
+    {
+      const flock = boids.current
+      const SEE = 90
+      for (const b of flock) {
+        let cx = 0
+        let cy = 0
+        let ax = 0
+        let ay = 0
+        let sx = 0
+        let sy = 0
+        let count = 0
+        for (const o of flock) {
+          if (o === b) continue
+          const dx = o.x - b.x
+          const dy = o.y - b.y
+          const dist = Math.hypot(dx, dy)
+          if (dist > SEE) continue
+          count++
+          cx += o.x
+          cy += o.y
+          ax += o.vx
+          ay += o.vy
+          if (dist < 26 && dist > 0.001) {
+            sx -= dx / dist
+            sy -= dy / dist
+          }
+        }
+        if (count > 0) {
+          b.vx += ((cx / count - b.x) * 0.0018 + (ax / count - b.vx) * 0.04 + sx * 0.08)
+          b.vy += ((cy / count - b.y) * 0.0018 + (ay / count - b.vy) * 0.04 + sy * 0.08)
+        }
+        // the hand parts the flock: boids flee anything poking the field
+        for (const p of pokes) {
+          const dx = b.x - p.x
+          const dy = b.y - p.y
+          const dist = Math.hypot(dx, dy)
+          if (dist < 190 && dist > 0.001) {
+            const f = ((1 - dist / 190) ** 2) * 1.1
+            b.vx += (dx / dist) * f
+            b.vy += (dy / dist) * f
+          }
+        }
+        // idle drift current so the school keeps wandering
+        b.vx += 0.015 * Math.sin(t0 * 0.2 + b.y * 0.004)
+        b.vy += 0.015 * Math.cos(t0 * 0.17 + b.x * 0.004)
+        const sp = Math.hypot(b.vx, b.vy) || 1
+        const clamped = Math.max(0.7, Math.min(2.6, sp))
+        b.vx = (b.vx / sp) * clamped
+        b.vy = (b.vy / sp) * clamped
+        b.x = (b.x + b.vx + w) % w
+        b.y = (b.y + b.vy + h) % h
+        // an elongated streak pointing along its heading
+        g.globalAlpha = 0.34
+        g.strokeStyle = '#8fb0d4'
+        g.lineWidth = 1.3
+        g.lineCap = 'round'
+        g.beginPath()
+        g.moveTo(b.x, b.y)
+        g.lineTo(b.x - (b.vx / clamped) * 7, b.y - (b.vy / clamped) * 7)
+        g.stroke()
+        softMote(g, b.x, b.y, 2.2, '#a8c4e4', 0.22)
+      }
     }
     g.globalCompositeOperation = 'source-over'
     g.globalAlpha = 1
@@ -1160,6 +1257,28 @@ export default function DrawSurface({
         softMote(g, p.x, p.y, p.size * 1.6, p.color, p.life * 0.35)
         continue
       }
+      if (p.kind === 'fila') {
+        // a glowing hair: a short line along its velocity, fading to nothing
+        const fl = 6 + p.size * 4
+        const streak = g.createLinearGradient(
+          p.x,
+          p.y,
+          p.x - p.vx * fl,
+          p.y - p.vy * fl,
+        )
+        streak.addColorStop(0, p.color)
+        streak.addColorStop(1, `${p.color.slice(0, 7)}00`)
+        g.globalAlpha = p.life * 0.8
+        g.strokeStyle = streak
+        g.lineCap = 'round'
+        g.lineWidth = p.size
+        g.beginPath()
+        g.moveTo(p.x, p.y)
+        g.lineTo(p.x - p.vx * fl, p.y - p.vy * fl)
+        g.stroke()
+        softMote(g, p.x, p.y, p.size * 1.4, p.color, p.life * 0.3)
+        continue
+      }
       const tw = 0.6 + 0.4 * Math.sin(now / 80 + p.x)
       softMote(
         g,
@@ -1221,46 +1340,51 @@ export default function DrawSurface({
         g.arc(cx, cy, r + 26 * (1 - s), 0, Math.PI * 2)
         g.stroke()
       } else {
-        // lit: a crisp bright ring hugging the orb
-        g.globalAlpha = 0.9
-        g.strokeStyle = '#fffaf0'
-        g.lineWidth = 1.6
+        // lit: a hand-sized rune circle — rotating mandala rings with
+        // spokes and ticks, like a conjuring seal cast around the hand
+        const R = Math.max(r + 14, (c.size ?? 0.1) * Math.min(w, h) * 1.5)
+        const spin = now / 2400
+        g.strokeStyle = c.color
+        g.shadowColor = c.color
+        g.shadowBlur = 14
+        g.globalAlpha = 0.75
+        g.lineWidth = 1.8
         g.beginPath()
-        g.arc(cx, cy, r + 4, 0, Math.PI * 2)
+        g.arc(cx, cy, R, 0, Math.PI * 2)
         g.stroke()
+        g.globalAlpha = 0.45
+        g.lineWidth = 1
+        g.beginPath()
+        g.arc(cx, cy, R * 0.78, 0, Math.PI * 2)
+        g.stroke()
+        // rotating tick marks around the outer band
+        g.globalAlpha = 0.7
+        for (let i = 0; i < 24; i++) {
+          const a = spin + (i / 24) * Math.PI * 2
+          const long = i % 6 === 0
+          const r0 = R * (long ? 0.88 : 0.93)
+          g.lineWidth = long ? 1.8 : 1
+          g.beginPath()
+          g.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0)
+          g.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R)
+          g.stroke()
+        }
+        // counter-rotating inner triangle — the sigil's core geometry
+        g.globalAlpha = 0.5
+        g.lineWidth = 1.2
+        g.beginPath()
+        for (let i = 0; i <= 3; i++) {
+          const a = -spin * 1.7 + (i / 3) * Math.PI * 2
+          const x2 = cx + Math.cos(a) * R * 0.62
+          const y2 = cy + Math.sin(a) * R * 0.62
+          if (i === 0) g.moveTo(x2, y2)
+          else g.lineTo(x2, y2)
+        }
+        g.stroke()
+        g.shadowBlur = 0
       }
     }
 
-    // radial pen wheel: swatches orbiting an open palm, rotate to highlight
-    for (const m of menus.current) {
-      const mx = m.x * w
-      const my = m.y * h
-      const R = Math.min(w, h) * 0.12
-      g.globalAlpha = 0.2
-      g.strokeStyle = '#e8e3d8'
-      g.lineWidth = 1
-      g.beginPath()
-      g.arc(mx, my, R, 0, Math.PI * 2)
-      g.stroke()
-      PENS.forEach((pen, i) => {
-        const a = -Math.PI / 2 + (i / PENS.length) * Math.PI * 2
-        const px = mx + Math.cos(a) * R
-        const py = my + Math.sin(a) * R
-        const sel = i === m.selected
-        const pulse = 0.85 + 0.15 * Math.sin(now / 180 + i)
-        softMote(g, px, py, sel ? 30 * pulse : 12, pen.color, sel ? 1 : 0.4)
-        if (sel) {
-          g.globalAlpha = 0.9
-          g.strokeStyle = '#fffaf0'
-          g.lineWidth = 1.6
-          g.beginPath()
-          g.arc(px, py, 20 * pulse, 0, Math.PI * 2)
-          g.stroke()
-        }
-      })
-      // centre: the currently highlighted colour glows in the palm
-      softMote(g, mx, my, 16, PENS[m.selected].color, 0.8)
-    }
     g.globalCompositeOperation = 'source-over'
     g.globalAlpha = 1
 
@@ -1385,6 +1509,7 @@ export default function DrawSurface({
         spawnChalk(p.x * canvas.width, p.y * canvas.height, tint, 4)
       } else if (pen.tool !== 'rain') {
         spawnTrail(p.x * canvas.width, p.y * canvas.height, tint)
+        spawnFilament(p.x * canvas.width, p.y * canvas.height, tint)
       }
     }
     onStrokesChangeRef.current([...strokesRef.current])
@@ -1418,9 +1543,6 @@ export default function DrawSurface({
       strokeCancel,
       setCursors: (c) => {
         cursors.current = c
-      },
-      setMenus: (m) => {
-        menus.current = m
       },
       notePulse: (id, strength = 1) => {
         notePulses.current.set(id, { t: performance.now(), s: strength })

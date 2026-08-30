@@ -8,9 +8,9 @@ import type {
   DrawHandle,
   DrawPoint,
   SurfaceCursor,
-  SurfaceMenu,
 } from './DrawSurface'
-import { PENS } from './pens'
+import { getPen } from './pens'
+import { setSummon, stopSummon, summonComplete } from './audio'
 
 const WASM_BASE =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm'
@@ -20,12 +20,10 @@ const MODEL_URL =
 // landmark indices
 const THUMB_TIP = 4
 const INDEX_TIP = 8
-const FINGER_TIPS = [8, 12, 16, 20]
-const REST_TIPS = [12, 16, 20] // middle/ring/pinky
 const WRIST = 0
 const MIDDLE_MCP = 9
 
-// bone chains for the dev-overlay skeleton
+// bone chains for the hand-skeleton overlay
 const BONES = [
   [0, 1, 2, 3, 4],
   [0, 5, 6, 7, 8],
@@ -35,29 +33,19 @@ const BONES = [
   [0, 17],
 ]
 
+// each hand slot conjures with its own magic material — no pen picking:
+// the first hand seals in gold, the second in jade
+const HAND_PENS = ['neon', 'crystal']
+
 // pinch hysteresis, as a fraction of palm size (wrist -> middle knuckle):
 // a tighter threshold so hovering fingers don't draw by accident
 const PINCH_ON = 0.32
 const PINCH_OFF = 0.44
 
-// fist hysteresis: avg fingertip-to-wrist distance vs palm size — a
-// bunched fist curls the fingertips back in towards the wrist
-const FIST_ON = 1.1
-const FIST_OFF = 1.35
-
-// a real drawing pinch keeps the middle/ring/pinky extended; if they're
-// curled too, the hand is bunching into a fist, so don't start a stroke
-const REST_OPEN = 1.25
-
-// rotating the fist by this much moves the wheel highlight by one pen:
-// very sensitive, so a small twist spins the selection
-const STEP_RAD = Math.PI / 14
-
 // gestures must hold steady for this many consecutive frames before they
-// trigger — overlapping fingers momentarily look like pinches/fists and
-// would otherwise fire strokes or switch tools at random
+// trigger — overlapping fingers momentarily look like pinches and would
+// otherwise fire strokes at random
 const PINCH_FRAMES = 3
-const FIST_FRAMES = 6
 
 // fraction of the camera frame cropped off each edge — the remaining
 // centre maps to the whole canvas (an effectively wider reach)
@@ -74,6 +62,12 @@ const SMOOTH_MAX = 0.85
 // alive this many frames before releasing it, so lines don't shatter
 const MISS_FRAMES = 10
 
+// the summoning ritual: where the right hand is placed to awaken the
+// instrument (screen fraction), and how many frames of holding it takes
+const RITUAL_X = 0.72
+const RITUAL_Y = 0.5
+const RITUAL_FRAMES = 55
+
 interface HandState {
   pinched: boolean
   last: { x: number; y: number; t: number } | null
@@ -82,16 +76,7 @@ interface HandState {
   sy: number
   sz: number // smoothed depth (palm size in frame: near = big = 1)
   glitch: number // consecutive frames rejected as tracking glitches
-  pen: number // index into PENS
-  fist: boolean
-  menuAngle: number // roll angle the wheel's current detent is anchored to
-  sroll: number // smoothed hand roll while the wheel is open
-  menuSel: number
   pinchHold: number // consecutive frames the pinch condition has held
-  fistHold: number // consecutive frames the fist condition has held
-  clickArmed: boolean // index has lifted off the thumb since the wheel opened
-  clickHold: number // consecutive frames the confirm tap has held
-  cooldown: number // frames after a confirm tap during which gestures are ignored
   miss: number // consecutive frames the hand has been lost by tracking
 }
 
@@ -100,16 +85,16 @@ interface Props {
 }
 
 /**
- * Camera hand tracking: MediaPipe finds up to two hands. Pinching index to
- * thumb draws (and plays) with the hand's current pen; bunching a fist
- * summons a radial pen wheel — rotate the fist to spin the highlight,
- * then tap index to thumb (or open the hand) to confirm the colour.
+ * Camera hand tracking: MediaPipe finds up to two hands, each drawn as a
+ * glowing magic-skeleton overlay. The instrument first has to be awakened
+ * by holding the right hand in the summoning circle; after that, pinching
+ * index to thumb conjures (draws and plays) with that hand's material.
  */
 export default function HandLayer({ surface }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
-  const debugRef = useRef<HTMLCanvasElement>(null)
+  const overlayRef = useRef<HTMLCanvasElement>(null)
   // dev mode (press D): ghost the camera feed over the canvas with the
-  // tracked skeleton and live gesture numbers, to see what tracking sees
+  // gesture numbers, to see what tracking sees
   const [dev, setDev] = useState(false)
   const devRef = useRef(dev)
   devRef.current = dev
@@ -130,6 +115,8 @@ export default function HandLayer({ surface }: Props) {
     let raf = 0
     let stopped = false
     const hands = new Map<number, HandState>()
+    // the awakening ritual: progress fills while a hand holds the circle
+    const ritual = { done: false, hold: 0, glow: 0 }
 
     const endAll = () => {
       for (const [id, s] of hands) {
@@ -137,12 +124,56 @@ export default function HandLayer({ surface }: Props) {
       }
       hands.clear()
       surface.current?.setCursors([])
-      surface.current?.setMenus([])
+      stopSummon()
     }
 
-    // dev overlay: mirrored skeleton + gesture numbers over the ghosted feed
-    const drawDebug = (res: HandLandmarkerResult) => {
-      const cv = debugRef.current
+    // selfie view: mirror x; the central region of the camera frame maps
+    // to the full canvas so the whole surface is reachable
+    const zoom = (v: number) =>
+      Math.min(1, Math.max(0, (v - CAM_MARGIN) / (1 - 2 * CAM_MARGIN)))
+
+    // a procedural open-hand silhouette: palm disc + five finger capsules,
+    // used as the "place your hand here" guide (hand-shaped, hand-sized)
+    const traceHandGuide = (
+      g: CanvasRenderingContext2D,
+      cx: number,
+      cy: number,
+      s: number,
+    ) => {
+      g.beginPath()
+      // palm
+      g.ellipse(cx, cy + s * 0.35, s * 0.52, s * 0.6, 0, 0, Math.PI * 2)
+      // four fingers fanning up
+      const fingers = [
+        { a: -0.42, l: 1.05, r: 0.13 },
+        { a: -0.14, l: 1.3, r: 0.14 },
+        { a: 0.12, l: 1.22, r: 0.135 },
+        { a: 0.38, l: 0.95, r: 0.12 },
+      ]
+      for (const f of fingers) {
+        const bx = cx + Math.sin(f.a) * s * 0.42
+        const by = cy - s * 0.05
+        const tx = cx + Math.sin(f.a) * s * (0.42 + f.l * 0.55)
+        const ty = by - Math.cos(f.a) * s * f.l
+        g.moveTo(bx + f.r * s, by)
+        g.arc(bx, by, f.r * s, 0, Math.PI, false)
+        g.moveTo(tx + f.r * s, ty)
+        g.ellipse(tx, ty, f.r * s, f.r * s, 0, 0, Math.PI * 2)
+        g.moveTo(bx - f.r * s, by)
+        g.lineTo(tx - f.r * s, ty)
+        g.moveTo(bx + f.r * s, by)
+        g.lineTo(tx + f.r * s, ty)
+      }
+      // thumb off to the side
+      g.moveTo(cx - s * 0.5, cy + s * 0.25)
+      g.lineTo(cx - s * 0.95, cy - s * 0.25)
+      g.ellipse(cx - s * 0.98, cy - s * 0.3, s * 0.13, s * 0.13, 0, 0, Math.PI * 2)
+    }
+
+    // the always-on magic overlay: hand skeletons as glowing filaments,
+    // the summoning guide before awakening, and dev-mode readouts
+    const drawOverlay = (res: HandLandmarkerResult | null) => {
+      const cv = overlayRef.current
       if (!cv) return
       const W = window.innerWidth
       const H = window.innerHeight
@@ -153,73 +184,126 @@ export default function HandLayer({ surface }: Props) {
       const g = cv.getContext('2d')
       if (!g) return
       g.clearRect(0, 0, W, H)
-      // the crop region that maps to the full canvas
-      g.strokeStyle = 'rgba(240,235,220,0.35)'
-      g.setLineDash([6, 6])
-      g.lineWidth = 1
-      g.strokeRect(
-        CAM_MARGIN * W,
-        CAM_MARGIN * H,
-        (1 - 2 * CAM_MARGIN) * W,
-        (1 - 2 * CAM_MARGIN) * H,
-      )
-      g.setLineDash([])
-      res.landmarks.forEach((lm, hand) => {
-        const px = (i: number) => (1 - lm[i].x) * W
-        const py = (i: number) => lm[i].y * H
-        g.strokeStyle = 'rgba(120,220,160,0.9)'
+      const now = performance.now()
+
+      if (!ritual.done) {
+        // summoning circle: an actual-hand-shaped guide, right of centre,
+        // with a progress ring filling around it while the hand holds
+        const cx = RITUAL_X * W
+        const cy = RITUAL_Y * H
+        const s = Math.min(W, H) * 0.13
+        const p = Math.min(1, ritual.hold / RITUAL_FRAMES)
+        const breathe = 0.8 + 0.2 * Math.sin(now / 600)
+        g.save()
+        g.globalCompositeOperation = 'lighter'
+        g.strokeStyle = '#e8c47a'
+        g.shadowColor = '#e8c47a'
+        g.shadowBlur = 16
         g.lineWidth = 2
+        g.globalAlpha = (0.35 + p * 0.55) * breathe
+        traceHandGuide(g, cx, cy, s)
+        g.stroke()
+        // outer ring + filling progress arc
+        const R = s * 2.1
+        g.globalAlpha = 0.3 * breathe
+        g.lineWidth = 1.5
+        g.beginPath()
+        g.arc(cx, cy, R, 0, Math.PI * 2)
+        g.stroke()
+        g.globalAlpha = 0.9
+        g.lineWidth = 3.5
+        g.strokeStyle = '#f5dfa8'
+        g.beginPath()
+        g.arc(cx, cy, R, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2)
+        g.stroke()
+        // rotating outer ticks — the seal charging up
+        g.globalAlpha = 0.25 + p * 0.5
+        g.lineWidth = 1.2
+        g.strokeStyle = '#e8c47a'
+        for (let i = 0; i < 16; i++) {
+          const a = now / 3000 + (i / 16) * Math.PI * 2
+          g.beginPath()
+          g.moveTo(cx + Math.cos(a) * R * 1.06, cy + Math.sin(a) * R * 1.06)
+          g.lineTo(cx + Math.cos(a) * R * 1.12, cy + Math.sin(a) * R * 1.12)
+          g.stroke()
+        }
+        g.shadowBlur = 0
+        g.globalAlpha = 0.75
+        g.fillStyle = '#e8e3d8'
+        g.font = '13px system-ui, sans-serif'
+        g.textAlign = 'center'
+        g.fillText('place your right hand in the circle', cx, cy + R + 28)
+        g.restore()
+      }
+
+      if (!res) return
+      res.landmarks.forEach((lm, hand) => {
+        const px = (i: number) => zoom(1 - lm[i].x) * W
+        const py = (i: number) => zoom(lm[i].y) * H
+        const pen = getPen(HAND_PENS[hand % HAND_PENS.length])
+        const s = hands.get(hand)
+        g.save()
+        g.globalCompositeOperation = 'lighter'
+        // glowing filament skeleton: the user's actual hand, made of light
+        g.strokeStyle = pen.color
+        g.shadowColor = pen.color
+        g.shadowBlur = 12
+        g.lineWidth = 2.2
+        g.lineCap = 'round'
+        g.globalAlpha = ritual.done ? 0.5 : 0.85
         for (const chain of BONES) {
           g.beginPath()
           g.moveTo(px(chain[0]), py(chain[0]))
-          for (let i = 1; i < chain.length; i++) g.lineTo(px(chain[i]), py(chain[i]))
+          for (let i = 1; i < chain.length; i++)
+            g.lineTo(px(chain[i]), py(chain[i]))
           g.stroke()
         }
-        g.fillStyle = '#f3efe4'
+        // joints as small motes, finger tips brighter
+        g.shadowBlur = 0
         for (let i = 0; i < lm.length; i++) {
+          const tipish = i === THUMB_TIP || i === INDEX_TIP
+          g.globalAlpha = (tipish ? 0.9 : 0.4) * (ritual.done ? 0.8 : 1)
+          g.fillStyle = tipish ? '#fff6e0' : pen.color
           g.beginPath()
-          g.arc(px(i), py(i), i === THUMB_TIP || i === INDEX_TIP ? 5 : 3, 0, Math.PI * 2)
+          g.arc(px(i), py(i), tipish ? 4 : 2.4, 0, Math.PI * 2)
           g.fill()
         }
-        const s = hands.get(hand)
-        if (!s) return
-        const wrist = lm[WRIST]
-        const mcp = lm[MIDDLE_MCP]
-        const palm = Math.hypot(wrist.x - mcp.x, wrist.y - mcp.y) || 1
-        const pinch =
-          Math.hypot(lm[INDEX_TIP].x - lm[THUMB_TIP].x, lm[INDEX_TIP].y - lm[THUMB_TIP].y) / palm
-        const spread =
-          FINGER_TIPS.reduce(
-            (sum, i) => sum + Math.hypot(lm[i].x - wrist.x, lm[i].y - wrist.y),
-            0,
-          ) /
-          (4 * palm)
-        const lines = [
-          `hand ${hand}  ${s.fist ? 'FIST/wheel' : s.pinched ? 'DRAWING' : 'idle'}`,
-          `pinch ${pinch.toFixed(2)} (on<${PINCH_ON} off>${PINCH_OFF})`,
-          `spread ${spread.toFixed(2)} (fist<${FIST_ON} open>${FIST_OFF})`,
-          `pen ${PENS[s.pen].id}  sel ${PENS[s.menuSel].id}  cooldown ${s.cooldown}`,
-        ]
-        g.font = '12px monospace'
-        g.textBaseline = 'top'
-        const tx = px(WRIST) + 16
-        const ty = py(WRIST) + 8
-        g.fillStyle = 'rgba(0,0,0,0.55)'
-        g.fillRect(tx - 4, ty - 4, 250, lines.length * 15 + 8)
-        g.fillStyle = '#d9f2e2'
-        lines.forEach((l, i) => g.fillText(l, tx, ty + i * 15))
+        g.restore()
+
+        if (devRef.current && s) {
+          const wrist = lm[WRIST]
+          const mcp = lm[MIDDLE_MCP]
+          const palm = Math.hypot(wrist.x - mcp.x, wrist.y - mcp.y) || 1
+          const pinch =
+            Math.hypot(
+              lm[INDEX_TIP].x - lm[THUMB_TIP].x,
+              lm[INDEX_TIP].y - lm[THUMB_TIP].y,
+            ) / palm
+          const lines = [
+            `hand ${hand}  ${s.pinched ? 'CONJURING' : 'idle'}`,
+            `pinch ${pinch.toFixed(2)} (on<${PINCH_ON} off>${PINCH_OFF})`,
+            `depth ${s.sz.toFixed(2)}  ritual ${ritual.done ? 'done' : ritual.hold}`,
+          ]
+          g.font = '12px monospace'
+          g.textBaseline = 'top'
+          g.textAlign = 'left'
+          const tx = px(WRIST) + 16
+          const ty = py(WRIST) + 8
+          g.fillStyle = 'rgba(0,0,0,0.55)'
+          g.fillRect(tx - 4, ty - 4, 250, lines.length * 15 + 8)
+          g.fillStyle = '#d9f2e2'
+          lines.forEach((l, i) => g.fillText(l, tx, ty + i * 15))
+        }
       })
     }
 
     const onFrame = (res: HandLandmarkerResult) => {
-      if (devRef.current) drawDebug(res)
-      else {
-        const cv = debugRef.current
-        cv?.getContext('2d')?.clearRect(0, 0, cv.width, cv.height)
-      }
+      drawOverlay(res)
       const cursors: SurfaceCursor[] = []
-      const menus: SurfaceMenu[] = []
       const seen = new Set<number>()
+      // the ritual: any hand hovering inside the summoning circle charges
+      // it; when the ring completes, the instrument awakens with a bloom
+      let inCircle = false
       res.landmarks.forEach((lm, hand) => {
         seen.add(hand)
         const thumb = lm[THUMB_TIP]
@@ -228,12 +312,6 @@ export default function HandLayer({ surface }: Props) {
         const mcp = lm[MIDDLE_MCP]
         const palm = Math.hypot(wrist.x - mcp.x, wrist.y - mcp.y)
 
-        // selfie view: mirror x so moving right moves the dot right.
-        // wide-angle mapping: the central region of the camera frame maps
-        // to the full canvas, so the whole surface is reachable without
-        // stretching your hand to the frame edges
-        const zoom = (v: number) =>
-          Math.min(1, Math.max(0, (v - CAM_MARGIN) / (1 - 2 * CAM_MARGIN)))
         const rawX = zoom(1 - tip.x)
         const rawY = zoom(tip.y)
         const pinchDist =
@@ -247,16 +325,7 @@ export default function HandLayer({ surface }: Props) {
           sy: rawY,
           sz: 0.5,
           glitch: 0,
-          pen: hand % PENS.length,
-          fist: false,
-          menuAngle: 0,
-          sroll: 0,
-          menuSel: 0,
           pinchHold: 0,
-          fistHold: 0,
-          clickArmed: false,
-          clickHold: 0,
-          cooldown: 0,
           miss: 0,
         }
         state.miss = 0
@@ -284,103 +353,21 @@ export default function HandLayer({ surface }: Props) {
         }
         state.last = { x, y, t: now }
 
-        // fist detection: fingertips curled back in towards the wrist
-        const spread =
-          FINGER_TIPS.reduce(
-            (sum, i) => sum + Math.hypot(lm[i].x - wrist.x, lm[i].y - wrist.y),
-            0,
-          ) /
-          (4 * (palm || 1))
-        // spread of the three non-index fingers: tells a pinch pose
-        // (extended) apart from a hand bunching into a fist (curled)
-        const restSpread =
-          REST_TIPS.reduce(
-            (sum, i) => sum + Math.hypot(lm[i].x - wrist.x, lm[i].y - wrist.y),
-            0,
-          ) /
-          (3 * (palm || 1))
-        // hand roll: angle of the wrist -> middle-knuckle axis (mirrored x)
-        const roll = Math.atan2(mcp.y - wrist.y, -(mcp.x - wrist.x))
+        // depth (Z axis of the 3D space): the tracked hand's size in the
+        // frame — palm span grows as the hand nears the camera
+        const zRaw = Math.min(1, Math.max(0, (palm - 0.06) / 0.22))
+        state.sz += (zRaw - state.sz) * 0.15
 
         const id = 1000 + hand
-        // debounced fist: bunched fingers mid-pinch can look fist-like for
-        // a frame or two — only a held fist summons or dismisses the wheel
-        if (state.cooldown > 0) state.cooldown--
-        const fistCond = state.fist ? spread > FIST_OFF : spread < FIST_ON
-        state.fistHold = fistCond ? state.fistHold + 1 : 0
-        if (
-          !state.fist &&
-          state.cooldown === 0 &&
-          state.fistHold >= FIST_FRAMES
-        ) {
-          // the fist outranks a pinch: an in-flight stroke is released so
-          // the wheel can always be summoned
-          if (state.pinched) {
-            state.pinched = false
-            state.pinchHold = 0
-            surface.current?.strokeCancel(id)
-          }
-          state.fist = true
-          state.fistHold = 0
-          state.menuAngle = roll
-          state.sroll = roll
-          state.menuSel = state.pen
-          // a bunched fist starts with the index near the thumb, so the
-          // confirm tap only arms once the finger has lifted away
-          state.clickArmed = false
-          state.clickHold = 0
-        } else if (state.fist && state.fistHold >= FIST_FRAMES) {
-          // hand opens: commit the highlighted pen
-          state.fist = false
-          state.fistHold = 0
-          state.pen = state.menuSel
-        }
+        const pen = HAND_PENS[hand % HAND_PENS.length]
+        const penColor = getPen(pen).color
 
-        if (state.fist) {
-          // spin the highlight as the fist rotates. The raw roll jitters
-          // with the camera, so it's smoothed first, then fed through a
-          // rotary detent: the highlight only steps once the smoothed roll
-          // travels a full notch past its anchor, and the anchor ratchets
-          // along — twitches inside a notch never flip the selection
-          let dr = roll - state.sroll
-          while (dr > Math.PI) dr -= Math.PI * 2
-          while (dr < -Math.PI) dr += Math.PI * 2
-          state.sroll += dr * 0.3
-          let d = state.sroll - state.menuAngle
-          while (d > Math.PI) d -= Math.PI * 2
-          while (d < -Math.PI) d += Math.PI * 2
-          const steps = Math.trunc(d / STEP_RAD)
-          if (steps !== 0) {
-            state.menuSel =
-              (((state.menuSel + steps) % PENS.length) + PENS.length) %
-              PENS.length
-            state.menuAngle += steps * STEP_RAD
-            while (state.menuAngle > Math.PI) state.menuAngle -= Math.PI * 2
-            while (state.menuAngle < -Math.PI) state.menuAngle += Math.PI * 2
-          }
-          // tap index to thumb to confirm the highlighted colour
-          if (!state.clickArmed) {
-            if (pinchDist > PINCH_OFF) state.clickArmed = true
-          } else if (pinchDist < PINCH_ON) {
-            state.clickHold++
-            if (state.clickHold >= PINCH_FRAMES) {
-              state.pen = state.menuSel
-              state.fist = false
-              state.fistHold = 0
-              state.clickArmed = false
-              state.clickHold = 0
-              state.cooldown = 12
-              hands.set(hand, state)
-              return
-            }
-          } else {
-            state.clickHold = 0
-          }
-          menus.push({
-            x: zoom(1 - mcp.x),
-            y: zoom(mcp.y),
-            selected: state.menuSel,
-          })
+        if (!ritual.done) {
+          // before the awakening: only the ritual listens to the hand
+          const guideR = Math.min(1, window.innerWidth / window.innerHeight)
+          const dx = (x - RITUAL_X) * (window.innerWidth / window.innerHeight)
+          const dy = y - RITUAL_Y
+          if (Math.hypot(dx, dy) < 0.16 * guideR + 0.1) inCircle = true
           hands.set(hand, state)
           return
         }
@@ -390,12 +377,7 @@ export default function HandLayer({ surface }: Props) {
           1,
           Math.max(0.15, (PINCH_OFF - pinchDist) / (PINCH_OFF - 0.15)),
         )
-        // depth (Z axis of the 3D space): the tracked hand's size in the
-        // frame — palm span grows as the hand nears the camera
-        const zRaw = Math.min(1, Math.max(0, (palm - 0.06) / 0.22))
-        state.sz += (zRaw - state.sz) * 0.15
         const p: DrawPoint = { x, y, pressure, speed: state.speed, z: state.sz }
-        const pen = PENS[state.pen].id
 
         // debounced pinch: must hold for a few frames so a finger briefly
         // crossing the thumb doesn't start (or cut) a stroke
@@ -403,12 +385,7 @@ export default function HandLayer({ surface }: Props) {
           ? pinchDist > PINCH_OFF
           : pinchDist < PINCH_ON
         state.pinchHold = pinchCond ? state.pinchHold + 1 : 0
-        if (
-          !state.pinched &&
-          state.cooldown === 0 &&
-          restSpread > REST_OPEN &&
-          state.pinchHold >= PINCH_FRAMES
-        ) {
+        if (!state.pinched && state.pinchHold >= PINCH_FRAMES) {
           state.pinched = true
           state.pinchHold = 0
           surface.current?.strokeStart(id, pen, p)
@@ -425,7 +402,7 @@ export default function HandLayer({ surface }: Props) {
           x,
           y,
           id,
-          color: PENS[state.pen].color,
+          color: penColor,
           active: state.pinched,
           // how close this finger is to activating (ring contracts)
           strength: Math.min(
@@ -433,6 +410,8 @@ export default function HandLayer({ surface }: Props) {
             Math.max(0, (1.2 - pinchDist) / (1.2 - PINCH_ON)),
           ),
           kind: 'tip',
+          // palm span scales the conjuring seal to the actual hand
+          size: palm * 2.2,
         })
         // the thumb is the activation point: show it as an anchor
         cursors.push({
@@ -443,6 +422,20 @@ export default function HandLayer({ surface }: Props) {
           kind: 'thumb',
         })
       })
+      if (!ritual.done) {
+        if (inCircle) {
+          ritual.hold++
+          setSummon(ritual.hold / RITUAL_FRAMES)
+          if (ritual.hold >= RITUAL_FRAMES) {
+            ritual.done = true
+            summonComplete()
+          }
+        } else {
+          ritual.hold = Math.max(0, ritual.hold - 2)
+          if (ritual.hold === 0) stopSummon()
+          else setSummon(ritual.hold / RITUAL_FRAMES)
+        }
+      }
       // hands that left the frame: give tracking a grace period to find
       // them again before their strokes are released
       for (const [hand, s] of hands) {
@@ -455,7 +448,6 @@ export default function HandLayer({ surface }: Props) {
         }
       }
       surface.current?.setCursors(cursors)
-      surface.current?.setMenus(menus)
     }
 
     let lastVideoTime = -1
@@ -470,6 +462,9 @@ export default function HandLayer({ surface }: Props) {
       ) {
         lastVideoTime = video.currentTime
         onFrame(landmarker.detectForVideo(video, performance.now()))
+      } else if (!ritual.done) {
+        // keep the summoning guide breathing even between camera frames
+        drawOverlay(null)
       }
       raf = requestAnimationFrame(loop)
     }
@@ -514,7 +509,8 @@ export default function HandLayer({ surface }: Props) {
   }, [surface])
 
   // camera feed is hidden in normal use; dev mode (D) ghosts it over the
-  // room, mirrored to match the canvas, with the skeleton overlay on top
+  // room, mirrored to match the canvas. The overlay canvas always shows
+  // the glowing hand skeleton and the summoning guide.
   return (
     <>
       <video
@@ -544,13 +540,12 @@ export default function HandLayer({ surface }: Props) {
         }
       />
       <canvas
-        ref={debugRef}
+        ref={overlayRef}
         style={{
           position: 'fixed',
           inset: 0,
           pointerEvents: 'none',
           zIndex: 41,
-          display: dev ? 'block' : 'none',
         }}
       />
     </>
