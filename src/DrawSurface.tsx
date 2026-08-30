@@ -11,6 +11,10 @@ import {
   sigilFor,
 } from './sigils'
 import auroraLoopUrl from './assets/aurora_loop.webm'
+import sealGoldAUrl from './assets/seal_gold_a.webm'
+import sealGoldBUrl from './assets/seal_gold_b.webm'
+import sealJadeAUrl from './assets/seal_jade_a.webm'
+import sealJadeBUrl from './assets/seal_jade_b.webm'
 
 // FAL-generated aurora video: a ping-pong seamless loop of gold/jade
 // curtains on black, composited additively as one massive overlay
@@ -33,6 +37,36 @@ function getAuroraVideo(): HTMLVideoElement {
     auroraVideo = v
   }
   return auroraVideo
+}
+
+function makeLoopVideo(src: string): HTMLVideoElement {
+  const v = document.createElement('video')
+  v.src = src
+  v.muted = true
+  v.loop = true
+  v.playsInline = true
+  v.play().catch(() => {
+    const kick = () => {
+      v.play().catch(() => {})
+      window.removeEventListener('pointerdown', kick)
+    }
+    window.addEventListener('pointerdown', kick)
+  })
+  return v
+}
+
+// FAL video-generated conjuring rings: two gold and two jade variants,
+// so simultaneous hands never wear the same seal
+let sealVideos: HTMLVideoElement[][] | null = null
+function sealVideoFor(jade: boolean, id: number): HTMLVideoElement | null {
+  if (!sealVideos) {
+    sealVideos = [
+      [makeLoopVideo(sealGoldAUrl), makeLoopVideo(sealGoldBUrl)],
+      [makeLoopVideo(sealJadeAUrl), makeLoopVideo(sealJadeBUrl)],
+    ]
+  }
+  const v = sealVideos[jade ? 1 : 0][Math.floor(id / 2) % 2]
+  return v.readyState >= 2 ? v : null
 }
 
 export interface DrawPoint {
@@ -621,8 +655,37 @@ export default function DrawSurface({
         const scale = Math.max(w / vw, h / vh) * 1.12
         const dw = vw * scale
         const dh = vh * scale
+        const dx0 = (w - dw) / 2
+        const dy0 = (h - dh) / 2 - h * 0.08
         g.globalAlpha = 0.34 * breathe
-        g.drawImage(video, (w - dw) / 2, (h - dh) / 2 - h * 0.08, dw, dh)
+        // interactive curtain: hands bend the light — the video draws in
+        // vertical slices, each pushed away from any nearby cursor
+        const bends: { x: number; y: number; s: number }[] = []
+        for (const c of cursors.current) {
+          if (c.kind === 'thumb') continue
+          bends.push({ x: c.x * w, y: c.y * h, s: c.active ? 1 : 0.4 + (c.strength ?? 0) * 0.5 })
+        }
+        if (hover.current) bends.push({ x: hover.current.x * w, y: hover.current.y * h, s: 0.5 })
+        if (bends.length === 0) {
+          g.drawImage(video, dx0, dy0, dw, dh)
+        } else {
+          const SLICES = 48
+          const sw = w / SLICES
+          const svw = vw / SLICES
+          for (let i = 0; i < SLICES; i++) {
+            const sx = (i + 0.5) * sw
+            let off = 0
+            for (const b of bends) {
+              const d = (sx - b.x) / (w * 0.18)
+              off += -b.s * h * 0.06 * Math.exp(-d * d) // light recoils upward
+            }
+            g.drawImage(
+              video,
+              i * svw, 0, svw, vh,
+              dx0 + (i * dw) / SLICES, dy0 + off, dw / SLICES + 1, dh,
+            )
+          }
+        }
       } else {
         for (let i = 0; i < AURORA.length; i++) {
           const a = AURORA[i]
@@ -1014,7 +1077,7 @@ export default function DrawSurface({
           const r1 = Math.sin(i * 91.7 + s.bornAt + flickFrame * 37.3) * 43758.5453
           const f1 = r1 - Math.floor(r1)
           const edge = Math.sin((Math.min(i, n - 1) / (n - 1)) * Math.PI)
-          const jag = (f1 - 0.5) * 16 * edge
+          const jag = (f1 - 0.5) * 34 * edge
           bolt.push({
             x: p.x * w - dy * jag,
             y: p.y * h + dx * jag,
@@ -1032,28 +1095,32 @@ export default function DrawSurface({
             for (let i = 1; i < bolt.length; i++) g.lineTo(bolt[i].x, bolt[i].y)
             g.stroke()
           }
-          // electric aura around the bolt
+          // wide electric aura around the bolt
           g.strokeStyle = cA
           g.shadowColor = cA
-          g.shadowBlur = 14
-          g.lineWidth = 2.6
-          g.globalAlpha = alpha * 0.5
+          g.shadowBlur = 30
+          g.lineWidth = 6
+          g.globalAlpha = alpha * 0.35
+          drawBolt()
+          g.shadowBlur = 16
+          g.lineWidth = 3.2
+          g.globalAlpha = alpha * 0.6
           drawBolt()
           // the white-hot core
           g.strokeStyle = '#fffdf5'
-          g.shadowBlur = 6
-          g.lineWidth = 1.1
-          g.globalAlpha = alpha * 0.95
+          g.shadowBlur = 8
+          g.lineWidth = 1.8
+          g.globalAlpha = alpha
           drawBolt()
           // forked branches: short two-segment arcs splitting off
           g.lineWidth = 0.8
           for (let i = 2; i < bolt.length - 2; i++) {
             const r2 = Math.sin(i * 17.9 + s.bornAt + flickFrame * 11.7) * 28001.83
             const f2 = r2 - Math.floor(r2)
-            if (f2 > 0.14) continue
+            if (f2 > 0.22) continue
             const b0 = bolt[i]
-            const side = f2 > 0.07 ? 1 : -1
-            const L = 10 + f2 * 160
+            const side = f2 > 0.11 ? 1 : -1
+            const L = 16 + f2 * 220
             const mx = b0.x + b0.nx * side * L * 0.6 + (f2 - 0.07) * 90
             const my = b0.y + b0.ny * side * L * 0.6
             g.strokeStyle = cA
@@ -1456,16 +1523,19 @@ export default function DrawSurface({
         )
         const breathe = 1 + 0.04 * Math.sin(now / 480 + (c.id ?? 0))
         const jade = (c.id ?? 1000) % 2 === 1
-        const outer = sigilFor(jade ? SIGIL_JADE : SIGIL_GOLD)
+        // every stratum of a seal wears its hand's own colour: jade
+        // hands hue-shift the shared pale-gold artwork into their family
+        const tint = jade ? 'hue-rotate(95deg) saturate(0.65)' : 'none'
         const glyphs = sigilFor(SIGIL_GLYPHS)
         const disc = sigilFor(SIGIL_PALE)
         // depth 0: a tight bloom of light welling up beneath the seal
         softMote(g, cx, cy, R * 0.8, c.color, 0.08, 0.08)
         const layer = (
-          img: HTMLImageElement | null,
+          img: HTMLImageElement | HTMLVideoElement | null,
           scale: number,
           rot: number,
           alpha: number,
+          filt = 'none',
         ) => {
           if (!img) return
           const LR = R * scale * breathe
@@ -1473,26 +1543,25 @@ export default function DrawSurface({
           g.translate(cx, cy)
           g.rotate(rot)
           g.globalAlpha = alpha
+          g.filter = filt
           g.drawImage(img, -LR, -LR, LR * 2, LR * 2)
+          g.filter = 'none'
           g.restore()
         }
-        // depth 1: the outer wispy energy ring, slow
-        layer(outer, 1, (jade ? -1 : 1) * (now / 2600), 0.9)
-        // depth 2: counter-rotating ring of arcane script
-        layer(glyphs, 0.64, (jade ? 1 : -1) * (now / 1500), 0.55)
-        // depth 3: a small pale disc whirling fast at the palm
-        layer(disc, 0.32, now / 600, 0.65)
-        if (!outer) {
-          g.strokeStyle = c.color
-          g.shadowColor = c.color
-          g.shadowBlur = 14
-          g.globalAlpha = 0.75
-          g.lineWidth = 1.8
-          g.beginPath()
-          g.arc(cx, cy, R, 0, Math.PI * 2)
-          g.stroke()
-          g.shadowBlur = 0
+        // depth 1: the outer energy ring — an AI-generated living video
+        // of spinning light, falling back to the still artwork until it
+        // has buffered
+        const ringVideo = sealVideoFor(jade, c.id ?? 0)
+        if (ringVideo) {
+          layer(ringVideo, 1.15, (jade ? -1 : 1) * (now / 5200), 0.95)
+        } else {
+          const outer = sigilFor(jade ? SIGIL_JADE : SIGIL_GOLD)
+          layer(outer, 1, (jade ? -1 : 1) * (now / 2600), 0.9)
         }
+        // depth 2: counter-rotating ring of arcane script
+        layer(glyphs, 0.64, (jade ? 1 : -1) * (now / 1500), 0.55, tint)
+        // depth 3: a small pale disc whirling fast at the palm
+        layer(disc, 0.32, now / 600, 0.65, tint)
         // the rip: a jagged luminous fissure torn through the seal's
         // heart, its teeth trembling as the pinch crushes space
         const seed = (c.id ?? 0) * 13.7
