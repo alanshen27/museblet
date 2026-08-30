@@ -88,8 +88,10 @@ export class Hand3DLayer {
   // one rig per hand slot, each loaded from the matching left/right GLB
   private rigs: (HandRig | null | 'loading')[] = [null, null]
   private loader = new GLTFLoader()
+  private canvas: HTMLCanvasElement
 
-  constructor(private canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       alpha: true,
@@ -154,13 +156,25 @@ export class Hand3DLayer {
       rig.root.visible = true
       rig.material.color.set(f.color)
 
+      // bones must live at the model's own (metre) scale or the skin
+      // stretches: normalise so wrist->middle-knuckle is a real hand's
+      // ~9cm, then scale the whole root up to screen pixels
+      const palm =
+        Math.hypot(
+          f.lm[0].x - f.lm[9].x,
+          f.lm[0].y - f.lm[9].y,
+          f.lm[0].z - f.lm[9].z,
+        ) || 0.1
+      const k = 0.09 / palm
+      rig.root.position.set(f.ax, f.ay, 0)
+      rig.root.scale.setScalar((f.scale * palm) / 0.09)
       const pos = (name: string): THREE.Vector3 => {
         const m = JOINT_MAP[name]
         const at = (i: number) =>
           new THREE.Vector3(
-            f.ax + (f.lm[9].x - f.lm[i].x) * f.scale,
-            f.ay + (f.lm[i].y - f.lm[9].y) * f.scale,
-            (f.lm[i].z - f.lm[9].z) * f.scale,
+            (f.lm[9].x - f.lm[i].x) * k,
+            (f.lm[i].y - f.lm[9].y) * k,
+            (f.lm[i].z - f.lm[9].z) * k,
           )
         if (typeof m === 'number') return at(m)
         return at(m[0]).lerp(at(m[1]), m[2])
