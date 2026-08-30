@@ -4,14 +4,36 @@ import { getPen } from './pens'
 import { playExplosion } from './audio'
 import { getStrokeTexture } from './textures'
 import {
-  AURORA_GOLD,
-  AURORA_JADE,
   SIGIL_GLYPHS,
   SIGIL_GOLD,
   SIGIL_JADE,
   SIGIL_PALE,
   sigilFor,
 } from './sigils'
+import auroraLoopUrl from './assets/aurora_loop.webm'
+
+// FAL-generated aurora video: a ping-pong seamless loop of gold/jade
+// curtains on black, composited additively as one massive overlay
+let auroraVideo: HTMLVideoElement | null = null
+function getAuroraVideo(): HTMLVideoElement {
+  if (!auroraVideo) {
+    const v = document.createElement('video')
+    v.src = auroraLoopUrl
+    v.muted = true
+    v.loop = true
+    v.playsInline = true
+    v.play().catch(() => {
+      // autoplay may need a gesture; retry on the first interaction
+      const kick = () => {
+        v.play().catch(() => {})
+        window.removeEventListener('pointerdown', kick)
+      }
+      window.addEventListener('pointerdown', kick)
+    })
+    auroraVideo = v
+  }
+  return auroraVideo
+}
 
 export interface DrawPoint {
   x: number
@@ -589,36 +611,37 @@ export default function DrawSurface({
       y: p.y + 0.0035 * terrainH(p.y + 0.37, p.x + 0.61, t0 * 0.5),
       pressure: p.pressure,
     })
-    for (let i = 0; i < AURORA.length; i++) {
-      const a = AURORA[i]
-      const cx = (0.5 + 0.42 * Math.sin(t0 * a.driftX + a.phase)) * w
-      const cy = (a.y + 0.08 * Math.sin(t0 * a.driftY + a.phase * 2)) * h
-      const breathe = 0.75 + 0.25 * Math.sin(t0 * 0.23 + a.phase * 3)
-      // AI-painted aurora ribbon (on black, additive) drifting as a
-      // looping curtain — slow scale/rotation sells the animation
-      const tex = sigilFor(i % 2 === 0 ? AURORA_GOLD : AURORA_JADE)
-      if (tex) {
-        const AW = w * (0.7 + 0.1 * Math.sin(t0 * 0.07 + a.phase))
-        const AH = AW * 0.5
-        g.save()
-        g.translate(cx, cy)
-        g.rotate(0.12 * Math.sin(t0 * 0.05 + a.phase * 2))
-        g.globalAlpha = a.alpha * breathe * 2.2
-        g.drawImage(tex, -AW / 2, -AH / 2, AW, AH)
-        g.restore()
-        continue
+    {
+      const video = getAuroraVideo()
+      if (video.readyState >= 2) {
+        // cover the whole room, breathing gently
+        const breathe = 0.8 + 0.2 * Math.sin(t0 * 0.19)
+        const vw = video.videoWidth
+        const vh = video.videoHeight
+        const scale = Math.max(w / vw, h / vh) * 1.12
+        const dw = vw * scale
+        const dh = vh * scale
+        g.globalAlpha = 0.34 * breathe
+        g.drawImage(video, (w - dw) / 2, (h - dh) / 2 - h * 0.08, dw, dh)
+      } else {
+        for (let i = 0; i < AURORA.length; i++) {
+          const a = AURORA[i]
+          const cx = (0.5 + 0.42 * Math.sin(t0 * a.driftX + a.phase)) * w
+          const cy = (a.y + 0.08 * Math.sin(t0 * a.driftY + a.phase * 2)) * h
+          const breathe = 0.75 + 0.25 * Math.sin(t0 * 0.23 + a.phase * 3)
+          const grad = g.createRadialGradient(cx, cy, 0, cx, cy, a.r * Math.min(w, h))
+          grad.addColorStop(0, a.color)
+          grad.addColorStop(1, `${a.color.slice(0, 7)}00`)
+          g.globalAlpha = a.alpha * breathe
+          g.save()
+          g.translate(cx, cy)
+          g.scale(2.6, 0.8) // stretched wide: curtain, not spotlight
+          g.translate(-cx, -cy)
+          g.fillStyle = grad
+          g.fillRect(0, 0, w, h)
+          g.restore()
+        }
       }
-      const grad = g.createRadialGradient(cx, cy, 0, cx, cy, a.r * Math.min(w, h))
-      grad.addColorStop(0, a.color)
-      grad.addColorStop(1, `${a.color.slice(0, 7)}00`)
-      g.globalAlpha = a.alpha * breathe
-      g.save()
-      g.translate(cx, cy)
-      g.scale(2.6, 0.8) // stretched wide: curtain, not spotlight
-      g.translate(-cx, -cy)
-      g.fillStyle = grad
-      g.fillRect(0, 0, w, h)
-      g.restore()
     }
     // the universe behind everything: a twinkling starfield with a soft
     // milky-way band drifting diagonally through the dark
