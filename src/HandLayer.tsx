@@ -548,13 +548,21 @@ export default function HandLayer({ surface }: Props) {
         video.currentTime !== lastVideoTime
       ) {
         lastVideoTime = video.currentTime
-        onFrame(landmarker.detectForVideo(video, performance.now()))
+        try {
+          onFrame(landmarker.detectForVideo(video, performance.now()))
+        } catch (err) {
+          console.warn('hand detection failed:', err)
+          drawOverlay(null)
+        }
       } else if (!ritual.done) {
         // keep the summoning guide breathing even between camera frames
         drawOverlay(null)
       }
       raf = requestAnimationFrame(loop)
     }
+    // show the summoning guide from the very first frame — camera and
+    // model spin up in the background and join in once ready
+    loop()
 
     ;(async () => {
       try {
@@ -580,7 +588,6 @@ export default function HandLayer({ surface }: Props) {
           minHandPresenceConfidence: 0.4,
           minTrackingConfidence: 0.4,
         })
-        loop()
       } catch (err) {
         console.warn('hand tracking unavailable:', err)
       }

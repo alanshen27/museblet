@@ -532,8 +532,8 @@ export default function DrawSurface({
     g.clearRect(0, 0, w, h)
 
     {
-      const gw = Math.max(2, w >> 2)
-      const gh = Math.max(2, h >> 2)
+      const gw = Math.max(2, w >> 1)
+      const gh = Math.max(2, h >> 1)
       let cv = grainCv.current
       if (!cv || cv.width !== gw || cv.height !== gh) {
         cv = document.createElement('canvas')
@@ -570,7 +570,7 @@ export default function DrawSurface({
         // grain rain: specks streaming down noise-displaced columns, the
         // displacement wobbling over time like a TD noise TOP
         gg.globalAlpha = 0.5
-        for (let i = 0; i < 180; i++) {
+        for (let i = 0; i < 220; i++) {
           const r1 = Math.sin(i * 127.1 + Math.floor(t * 9) * 311.7) * 43758.5453
           const f1 = r1 - Math.floor(r1)
           const r2 = Math.sin(i * 269.5 + Math.floor(t * 9) * 183.3) * 28001.83
@@ -580,7 +580,7 @@ export default function DrawSurface({
           const gy = ((f2 + t * 0.045) % 1) * gh
           const warm = f1 * 3 % 1 < 0.55
           gg.fillStyle = warm ? '#8a6f3c' : '#4d6b5c'
-          gg.globalAlpha = 0.1 + f2 * 0.3
+          gg.globalAlpha = 0.05 + f2 * 0.16
           gg.fillRect(gx, gy, 1, 1 + f1 * 2)
         }
         // the field answers the hands: cursors and live stroke tips pour
@@ -615,8 +615,8 @@ export default function DrawSurface({
       // blit up, soft-blurred, additively — grain becomes breathing haze
       g.save()
       g.globalCompositeOperation = 'lighter'
-      g.globalAlpha = 0.6
-      g.filter = 'blur(1.5px)'
+      g.globalAlpha = 0.45
+      g.filter = 'blur(1px)'
       g.imageSmoothingEnabled = true
       g.drawImage(cv, 0, 0, w, h)
       g.filter = 'none'
@@ -648,37 +648,35 @@ export default function DrawSurface({
           driftX += (hover.current.x - 0.5) * w * 0.03
           driftY += (hover.current.y - 0.5) * h * 0.02
         }
-        // several smaller curtains layered at different depths: each has
-        // its own scale, drift speed, sway phase and tint so the sky reads
-        // as parallax bands of colour rather than one wall of light
+        // two full-screen curtains, cover-scaled well past the edges so no
+        // frame border can ever show: the warm sky with the cool layer
+        // breathing over it at its own drift/tint for the multicolour depth
         const layers: {
           v: HTMLVideoElement
-          x: number // centre, screen fraction
-          y: number
-          s: number // width, screen fraction
           sway: number // horizontal sway speed
           alpha: number
           tint: string
           depth: number // how much the hands drag this layer
         }[] = [
-          { v: cool, x: 0.74, y: 0.2, s: 0.62, sway: 0.05, alpha: 0.42, tint: 'none', depth: 0.5 },
-          { v: warm, x: 0.24, y: 0.16, s: 0.55, sway: 0.07, alpha: 0.4, tint: 'none', depth: 0.8 },
-          { v: cool, x: 0.42, y: 0.1, s: 0.4, sway: 0.09, alpha: 0.3, tint: 'hue-rotate(120deg) saturate(0.9)', depth: 1.2 },
-          { v: warm, x: 0.9, y: 0.08, s: 0.3, sway: 0.11, alpha: 0.26, tint: 'hue-rotate(-25deg)', depth: 1.5 },
+          { v: warm, sway: 0.05, alpha: 0.5, tint: 'none', depth: 0.5 },
+          { v: cool, sway: 0.08, alpha: 0.34, tint: 'none', depth: 0.9 },
         ]
         for (let i = 0; i < layers.length; i++) {
           const L = layers[i]
           if (L.v.readyState < 2) continue
-          const breathe = 0.75 + 0.25 * Math.sin(t0 * 0.19 + i * 1.7)
-          const dw = w * L.s
-          const dh = (dw * L.v.videoHeight) / L.v.videoWidth
+          const breathe = 0.8 + 0.2 * Math.sin(t0 * 0.19 + i * 1.7)
+          // cover: scale to fill the whole screen plus margin for the sway
+          const scale =
+            Math.max(w / L.v.videoWidth, h / L.v.videoHeight) * 1.12
+          const dw = L.v.videoWidth * scale
+          const dh = L.v.videoHeight * scale
           const cx =
-            L.x * w + Math.sin(t0 * L.sway + i * 2.3) * w * 0.04 + driftX * L.depth
-          const cy = L.y * h + driftY * L.depth
+            w / 2 + Math.sin(t0 * L.sway + i * 2.3) * w * 0.025 + driftX * L.depth
+          const cy = h / 2 + driftY * L.depth
           g.save()
           g.globalAlpha = L.alpha * breathe
           g.filter = L.tint
-          g.drawImage(L.v, cx - dw / 2, cy - dh * 0.15, dw, dh)
+          g.drawImage(L.v, cx - dw / 2, cy - dh / 2, dw, dh)
           g.filter = 'none'
           g.restore()
         }
