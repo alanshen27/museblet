@@ -85,6 +85,7 @@ interface GlideVoice {
   lfo: OscillatorNode
   gain: GainNode
   filter: BiquadFilterNode
+  wet: GainNode
   penId: string
 }
 const glides = new Map<number, GlideVoice>()
@@ -94,6 +95,9 @@ export function glideTo(
   penId: string,
   midi: number,
   level: number,
+  // depth controls: hand distance from the camera shapes the timbre
+  cutoff?: number,
+  reverbMix?: number,
 ) {
   const ac = getContext()
   const pen = getPen(penId)
@@ -112,7 +116,10 @@ export function glideTo(
     filter.frequency.value = Math.min(3200, pen.filterBase + pen.filterEnv * 0.5)
     filter.connect(gain)
     gain.connect(master!)
-    gain.connect(reverb!)
+    const wet = ac.createGain()
+    wet.gain.value = 1
+    gain.connect(wet)
+    wet.connect(reverb!)
     gain.connect(delaySend!)
     const mk = (cents: number) => {
       const osc = ac.createOscillator()
@@ -134,7 +141,7 @@ export function glideTo(
     lfoGain.connect(osc.detune)
     lfoGain.connect(osc2.detune)
     lfo.start(now)
-    v = { osc, osc2, lfo, gain, filter, penId }
+    v = { osc, osc2, lfo, gain, filter, wet, penId }
     glides.set(pointerId, v)
   }
   const freq = midiToFreq(midi + pen.octaveShift * 12)
@@ -142,6 +149,20 @@ export function glideTo(
   v.osc.frequency.setTargetAtTime(freq, ac.currentTime, 0.08)
   v.osc2.frequency.setTargetAtTime(freq, ac.currentTime, 0.08)
   v.gain.gain.setTargetAtTime(level, ac.currentTime, 0.09)
+  if (cutoff !== undefined) {
+    v.filter.frequency.setTargetAtTime(
+      Math.max(120, Math.min(6000, cutoff)),
+      ac.currentTime,
+      0.12,
+    )
+  }
+  if (reverbMix !== undefined) {
+    v.wet.gain.setTargetAtTime(
+      Math.max(0, Math.min(1.5, reverbMix)),
+      ac.currentTime,
+      0.15,
+    )
+  }
 }
 
 export function glideStop(pointerId: number) {
