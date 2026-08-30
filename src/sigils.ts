@@ -1,15 +1,19 @@
-// FAL-generated magic circle artwork (flux/schnell), shipped as assets.
+// FAL-generated magic artwork (flux/schnell), shipped as assets.
 // Painted on black so they can be composited additively ('lighter') —
-// the black vanishes and only the glowing linework remains.
+// the black vanishes and only the glowing energy remains.
 import goldUrl from './assets/sigil_gold.webp'
 import jadeUrl from './assets/sigil_jade.webp'
-import moonUrl from './assets/sigil_moon.webp'
+import paleUrl from './assets/sigil_pale.webp'
+import glyphsUrl from './assets/sigil_glyphs.webp'
+import handUrl from './assets/hand_guide.webp'
 
 export const SIGIL_GOLD = 0
 export const SIGIL_JADE = 1
-export const SIGIL_MOON = 2
+export const SIGIL_PALE = 2
+export const SIGIL_GLYPHS = 3
+export const HAND_GUIDE = 4
 
-const images = [goldUrl, jadeUrl, moonUrl].map((url) => {
+const images = [goldUrl, jadeUrl, paleUrl, glyphsUrl, handUrl].map((url) => {
   const img = new Image()
   img.src = url
   return img

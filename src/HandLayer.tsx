@@ -11,7 +11,7 @@ import type {
 } from './DrawSurface'
 import { getPen } from './pens'
 import { setSummon, stopSummon, summonComplete } from './audio'
-import { SIGIL_MOON, sigilFor } from './sigils'
+import { HAND_GUIDE, SIGIL_PALE, sigilFor } from './sigils'
 
 const WASM_BASE =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm'
@@ -197,24 +197,33 @@ export default function HandLayer({ surface }: Props) {
         const breathe = 0.8 + 0.2 * Math.sin(now / 600)
         g.save()
         g.globalCompositeOperation = 'lighter'
-        // the celestial summoning circle turns slowly beneath the guide
-        const moon = sigilFor(SIGIL_MOON)
-        if (moon) {
+        // a pale-gold summoning circle turns slowly beneath the guide
+        const seal = sigilFor(SIGIL_PALE)
+        if (seal) {
           const SR = s * 2.5
           g.save()
           g.translate(cx, cy)
           g.rotate(now / 14000)
           g.globalAlpha = (0.22 + p * 0.5) * breathe
-          g.drawImage(moon, -SR, -SR, SR * 2, SR * 2)
+          g.drawImage(seal, -SR, -SR, SR * 2, SR * 2)
           g.restore()
         }
-        g.strokeStyle = '#e8c47a'
-        g.shadowColor = '#e8c47a'
-        g.shadowBlur = 16
-        g.lineWidth = 2
-        g.globalAlpha = (0.35 + p * 0.55) * breathe
-        traceHandGuide(g, cx, cy, s)
-        g.stroke()
+        // the guide itself: a real hand rimmed in candlelight (generated
+        // artwork, additive so its black ground melts into the room)
+        const handImg = sigilFor(HAND_GUIDE)
+        if (handImg) {
+          const HR = s * 2.3
+          g.globalAlpha = (0.5 + p * 0.5) * breathe
+          g.drawImage(handImg, cx - HR, cy - HR * 1.08, HR * 2, HR * 2)
+        } else {
+          g.strokeStyle = '#e8c47a'
+          g.shadowColor = '#e8c47a'
+          g.shadowBlur = 16
+          g.lineWidth = 2
+          g.globalAlpha = (0.35 + p * 0.55) * breathe
+          traceHandGuide(g, cx, cy, s)
+          g.stroke()
+        }
         // outer ring + filling progress arc
         const R = s * 2.1
         g.globalAlpha = 0.3 * breathe
@@ -261,29 +270,66 @@ export default function HandLayer({ surface }: Props) {
         const s = hands.get(hand)
         g.save()
         g.globalCompositeOperation = 'lighter'
-        // glowing filament skeleton: the user's actual hand, made of light
-        g.strokeStyle = pen.color
-        g.shadowColor = pen.color
-        g.shadowBlur = 12
-        g.lineWidth = 2.2
+        const dim = ritual.done ? 0.55 : 0.9
+        // a pool of light cradling the palm, so the hand feels lit from
+        // within rather than wireframed
+        const palmR = Math.hypot(px(WRIST) - ax, py(WRIST) - ay) * 1.5 || 60
+        const pg = g.createRadialGradient(ax, ay, 0, ax, ay, palmR)
+        pg.addColorStop(0, `${pen.color}55`)
+        pg.addColorStop(1, `${pen.color}00`)
+        g.globalAlpha = dim
+        g.fillStyle = pg
+        g.beginPath()
+        g.arc(ax, ay, palmR, 0, Math.PI * 2)
+        g.fill()
+        // filament skeleton drawn as tapering candle-lit strokes: thick
+        // and warm at the palm, thinning to bright hairlines at the tips
         g.lineCap = 'round'
-        g.globalAlpha = ritual.done ? 0.5 : 0.85
+        g.shadowColor = pen.color
         for (const chain of BONES) {
-          g.beginPath()
-          g.moveTo(px(chain[0]), py(chain[0]))
-          for (let i = 1; i < chain.length; i++)
+          for (let i = 1; i < chain.length; i++) {
+            const f = i / (chain.length - 1)
+            g.strokeStyle = pen.color
+            g.shadowBlur = 10 - f * 5
+            g.lineWidth = 4.2 - f * 3
+            g.globalAlpha = (0.35 + 0.4 * (1 - f)) * dim
+            g.beginPath()
+            g.moveTo(px(chain[i - 1]), py(chain[i - 1]))
             g.lineTo(px(chain[i]), py(chain[i]))
-          g.stroke()
+            g.stroke()
+            // a bright hairline core over the soft stroke
+            g.strokeStyle = '#fff6e0'
+            g.shadowBlur = 0
+            g.lineWidth = 0.8
+            g.globalAlpha = 0.5 * dim
+            g.beginPath()
+            g.moveTo(px(chain[i - 1]), py(chain[i - 1]))
+            g.lineTo(px(chain[i]), py(chain[i]))
+            g.stroke()
+          }
         }
-        // joints as small motes, finger tips brighter
-        g.shadowBlur = 0
+        // fingertips carry candle flames; other joints only faint motes
         for (let i = 0; i < lm.length; i++) {
           const tipish = i === THUMB_TIP || i === INDEX_TIP
-          g.globalAlpha = (tipish ? 0.9 : 0.4) * (ritual.done ? 0.8 : 1)
-          g.fillStyle = tipish ? '#fff6e0' : pen.color
-          g.beginPath()
-          g.arc(px(i), py(i), tipish ? 4 : 2.4, 0, Math.PI * 2)
-          g.fill()
+          if (tipish) {
+            const flick = 0.85 + 0.15 * Math.sin(now / 90 + i * 3.1)
+            const fr = 7 * flick
+            const fg = g.createRadialGradient(px(i), py(i), 0, px(i), py(i), fr * 2.4)
+            fg.addColorStop(0, '#fff6e0')
+            fg.addColorStop(0.35, pen.color)
+            fg.addColorStop(1, `${pen.color}00`)
+            g.globalAlpha = 0.9 * dim
+            g.fillStyle = fg
+            g.beginPath()
+            g.arc(px(i), py(i), fr * 2.4, 0, Math.PI * 2)
+            g.fill()
+          } else {
+            g.globalAlpha = 0.3 * dim
+            g.fillStyle = pen.color
+            g.beginPath()
+            g.arc(px(i), py(i), 2, 0, Math.PI * 2)
+            g.fill()
+          }
         }
         g.restore()
 
