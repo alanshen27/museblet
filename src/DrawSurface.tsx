@@ -10,34 +10,12 @@ import {
   SIGIL_PALE,
   sigilFor,
 } from './sigils'
-import auroraLoopUrl from './assets/aurora_loop.webm'
+import auroraWarmUrl from './assets/aurora_warm.webm'
+import auroraCoolUrl from './assets/aurora_cool.webm'
 import sealGoldAUrl from './assets/seal_gold_a.webm'
 import sealGoldBUrl from './assets/seal_gold_b.webm'
 import sealJadeAUrl from './assets/seal_jade_a.webm'
 import sealJadeBUrl from './assets/seal_jade_b.webm'
-
-// FAL-generated aurora video: a ping-pong seamless loop of gold/jade
-// curtains on black, composited additively as one massive overlay
-let auroraVideo: HTMLVideoElement | null = null
-function getAuroraVideo(): HTMLVideoElement {
-  if (!auroraVideo) {
-    const v = document.createElement('video')
-    v.src = auroraLoopUrl
-    v.muted = true
-    v.loop = true
-    v.playsInline = true
-    v.play().catch(() => {
-      // autoplay may need a gesture; retry on the first interaction
-      const kick = () => {
-        v.play().catch(() => {})
-        window.removeEventListener('pointerdown', kick)
-      }
-      window.addEventListener('pointerdown', kick)
-    })
-    auroraVideo = v
-  }
-  return auroraVideo
-}
 
 function makeLoopVideo(src: string): HTMLVideoElement {
   const v = document.createElement('video')
@@ -67,6 +45,17 @@ function sealVideoFor(jade: boolean, id: number): HTMLVideoElement | null {
   }
   const v = sealVideos[jade ? 1 : 0][Math.floor(id / 2) % 2]
   return v.readyState >= 2 ? v : null
+}
+
+// FAL-generated aurora curtains, each already a forwards-backwards
+// ping-pong loop: a warm amber/crimson curtain and a cool jade/teal one,
+// layered several times at different scales, drifts and tints
+let auroraVideos: [HTMLVideoElement, HTMLVideoElement] | null = null
+function getAuroraVideos(): [HTMLVideoElement, HTMLVideoElement] {
+  if (!auroraVideos) {
+    auroraVideos = [makeLoopVideo(auroraWarmUrl), makeLoopVideo(auroraCoolUrl)]
+  }
+  return auroraVideos
 }
 
 export interface DrawPoint {
@@ -646,17 +635,8 @@ export default function DrawSurface({
       pressure: p.pressure,
     })
     {
-      const video = getAuroraVideo()
-      if (video.readyState >= 2) {
-        // cover the whole room, breathing gently
-        const breathe = 0.8 + 0.2 * Math.sin(t0 * 0.19)
-        const vw = video.videoWidth
-        const vh = video.videoHeight
-        // one seamless full-screen draw, oversized so a gentle whole-frame
-        // drift toward the hands never exposes an edge
-        const scale = Math.max(w / vw, h / vh) * 1.22
-        const dw = vw * scale
-        const dh = vh * scale
+      const [warm, cool] = getAuroraVideos()
+      if (warm.readyState >= 2 || cool.readyState >= 2) {
         let driftX = 0
         let driftY = 0
         for (const c of cursors.current) {
@@ -668,14 +648,40 @@ export default function DrawSurface({
           driftX += (hover.current.x - 0.5) * w * 0.03
           driftY += (hover.current.y - 0.5) * h * 0.02
         }
-        g.globalAlpha = 0.5 * breathe
-        g.drawImage(
-          video,
-          (w - dw) / 2 + driftX,
-          (h - dh) / 2 - h * 0.06 + driftY,
-          dw,
-          dh,
-        )
+        // several smaller curtains layered at different depths: each has
+        // its own scale, drift speed, sway phase and tint so the sky reads
+        // as parallax bands of colour rather than one wall of light
+        const layers: {
+          v: HTMLVideoElement
+          x: number // centre, screen fraction
+          y: number
+          s: number // width, screen fraction
+          sway: number // horizontal sway speed
+          alpha: number
+          tint: string
+          depth: number // how much the hands drag this layer
+        }[] = [
+          { v: cool, x: 0.74, y: 0.2, s: 0.62, sway: 0.05, alpha: 0.42, tint: 'none', depth: 0.5 },
+          { v: warm, x: 0.24, y: 0.16, s: 0.55, sway: 0.07, alpha: 0.4, tint: 'none', depth: 0.8 },
+          { v: cool, x: 0.42, y: 0.1, s: 0.4, sway: 0.09, alpha: 0.3, tint: 'hue-rotate(120deg) saturate(0.9)', depth: 1.2 },
+          { v: warm, x: 0.9, y: 0.08, s: 0.3, sway: 0.11, alpha: 0.26, tint: 'hue-rotate(-25deg)', depth: 1.5 },
+        ]
+        for (let i = 0; i < layers.length; i++) {
+          const L = layers[i]
+          if (L.v.readyState < 2) continue
+          const breathe = 0.75 + 0.25 * Math.sin(t0 * 0.19 + i * 1.7)
+          const dw = w * L.s
+          const dh = (dw * L.v.videoHeight) / L.v.videoWidth
+          const cx =
+            L.x * w + Math.sin(t0 * L.sway + i * 2.3) * w * 0.04 + driftX * L.depth
+          const cy = L.y * h + driftY * L.depth
+          g.save()
+          g.globalAlpha = L.alpha * breathe
+          g.filter = L.tint
+          g.drawImage(L.v, cx - dw / 2, cy - dh * 0.15, dw, dh)
+          g.filter = 'none'
+          g.restore()
+        }
       } else {
         for (let i = 0; i < AURORA.length; i++) {
           const a = AURORA[i]
