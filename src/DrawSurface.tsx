@@ -567,23 +567,57 @@ export default function DrawSurface({
           gg.fillStyle = grad
           gg.fillRect(0, 0, gw, gh)
         }
-        // grain rain: specks streaming down noise-displaced columns, the
-        // displacement wobbling over time like a TD noise TOP
-        gg.globalAlpha = 0.5
-        for (let i = 0; i < 380; i++) {
-          const r1 = Math.sin(i * 127.1 + Math.floor(t * 9) * 311.7) * 43758.5453
+        // distant galaxies: faint tilted elliptical smudges deep in the room
+        const galaxies = [
+          { x: 0.22, y: 0.3, r: 0.16, a: 0.05, tilt: 0.6, c: '#6b5a36' },
+          { x: 0.74, y: 0.62, r: 0.2, a: 0.04, tilt: -0.9, c: '#3c5a4c' },
+          { x: 0.55, y: 0.16, r: 0.11, a: 0.045, tilt: 1.8, c: '#4a4a62' },
+        ]
+        for (const ga of galaxies) {
+          const cx = ga.x * gw
+          const cy = ga.y * gh
+          const rr = ga.r * Math.min(gw, gh)
+          gg.save()
+          gg.translate(cx, cy)
+          gg.rotate(ga.tilt + t * 0.008)
+          gg.scale(1, 0.36)
+          const grad = gg.createRadialGradient(0, 0, 0, 0, 0, rr)
+          grad.addColorStop(0, ga.c)
+          grad.addColorStop(0.35, `${ga.c}66`)
+          grad.addColorStop(1, `${ga.c}00`)
+          gg.globalAlpha = ga.a * (0.8 + 0.2 * Math.sin(t * 0.11 + ga.tilt * 5))
+          gg.fillStyle = grad
+          gg.fillRect(-rr, -rr, rr * 2, rr * 2)
+          gg.restore()
+        }
+        // the grain itself: embers drifting slowly upward through the dark,
+        // with a field of pinprick stars twinkling far behind them
+        for (let i = 0; i < 340; i++) {
+          const r1 = Math.sin(i * 127.1 + 311.7) * 43758.5453
           const f1 = r1 - Math.floor(r1)
-          const r2 = Math.sin(i * 269.5 + Math.floor(t * 9) * 183.3) * 28001.83
+          const r2 = Math.sin(i * 269.5 + 183.3) * 28001.83
           const f2 = r2 - Math.floor(r2)
-          const gx =
-            (f1 + 0.08 * Math.sin(t * 0.7 + f2 * 12 + f1 * 5)) * gw
-          const gy = ((f2 + t * 0.045) % 1) * gh
-          const warm = f1 * 3 % 1 < 0.55
-          // a few white-hot embers ride the rain so the field sparkles
-          const hot = (f1 * 7) % 1 < 0.06
-          gg.fillStyle = hot ? '#e8dcc0' : warm ? '#8a6f3c' : '#4d6b5c'
-          gg.globalAlpha = hot ? 0.2 + f2 * 0.25 : 0.05 + f2 * 0.16
-          gg.fillRect(gx, gy, 1, 1 + f1 * (hot ? 4 : 2))
+          const star = i % 3 === 0
+          if (star) {
+            // stars hold still and twinkle
+            const gx = f1 * gw
+            const gy = f2 * gh
+            const tw = 0.5 + 0.5 * Math.sin(t * (0.6 + f1 * 2.2) + i)
+            gg.fillStyle = f2 > 0.85 ? '#e8dcc0' : '#b9c4bc'
+            gg.globalAlpha = (0.04 + f1 * 0.14) * tw
+            gg.fillRect(gx, gy, 1, 1)
+          } else {
+            // embers rise and sway like sparks off a distant fire
+            const gx =
+              (f1 + 0.05 * Math.sin(t * 0.5 + f2 * 12 + f1 * 5)) * gw
+            const gy = ((f2 - t * (0.012 + f1 * 0.02)) % 1 + 1) % 1 * gh
+            const flicker = 0.6 + 0.4 * Math.sin(t * (2 + f1 * 5) + i)
+            const hot = (f1 * 7) % 1 < 0.08
+            gg.fillStyle = hot ? '#ffd9a0' : f1 * 3 % 1 < 0.6 ? '#a2733a' : '#4d6b5c'
+            gg.globalAlpha = (hot ? 0.22 + f2 * 0.25 : 0.05 + f2 * 0.14) * flicker
+            const sz = hot ? 2 : 1
+            gg.fillRect(gx, gy, sz, sz + f1 * (hot ? 2 : 1))
+          }
         }
         // the field answers the hands: cursors and live stroke tips pour
         // energy into the feedback buffer, so light bleeds and smears
@@ -663,8 +697,8 @@ export default function DrawSurface({
           tint: string
           depth: number // how much the hands drag this layer
         }[] = [
-          { v: warm, sway: 0.05, alpha: 0.5, tint: 'none', depth: 0.5 },
-          { v: cool, sway: 0.08, alpha: 0.34, tint: 'none', depth: 0.9 },
+          { v: warm, sway: 0.05, alpha: 0.26, tint: 'none', depth: 0.5 },
+          { v: cool, sway: 0.08, alpha: 0.17, tint: 'none', depth: 0.9 },
         ]
         for (let i = 0; i < layers.length; i++) {
           const L = layers[i]
