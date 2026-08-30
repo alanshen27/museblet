@@ -652,40 +652,30 @@ export default function DrawSurface({
         const breathe = 0.8 + 0.2 * Math.sin(t0 * 0.19)
         const vw = video.videoWidth
         const vh = video.videoHeight
-        const scale = Math.max(w / vw, h / vh) * 1.12
+        // one seamless full-screen draw, oversized so a gentle whole-frame
+        // drift toward the hands never exposes an edge
+        const scale = Math.max(w / vw, h / vh) * 1.22
         const dw = vw * scale
         const dh = vh * scale
-        const dx0 = (w - dw) / 2
-        const dy0 = (h - dh) / 2 - h * 0.08
-        g.globalAlpha = 0.34 * breathe
-        // interactive curtain: hands bend the light — the video draws in
-        // vertical slices, each pushed away from any nearby cursor
-        const bends: { x: number; y: number; s: number }[] = []
+        let driftX = 0
+        let driftY = 0
         for (const c of cursors.current) {
           if (c.kind === 'thumb') continue
-          bends.push({ x: c.x * w, y: c.y * h, s: c.active ? 1 : 0.4 + (c.strength ?? 0) * 0.5 })
+          driftX += (c.x - 0.5) * w * 0.045
+          driftY += (c.y - 0.5) * h * 0.03
         }
-        if (hover.current) bends.push({ x: hover.current.x * w, y: hover.current.y * h, s: 0.5 })
-        if (bends.length === 0) {
-          g.drawImage(video, dx0, dy0, dw, dh)
-        } else {
-          const SLICES = 48
-          const sw = w / SLICES
-          const svw = vw / SLICES
-          for (let i = 0; i < SLICES; i++) {
-            const sx = (i + 0.5) * sw
-            let off = 0
-            for (const b of bends) {
-              const d = (sx - b.x) / (w * 0.18)
-              off += -b.s * h * 0.06 * Math.exp(-d * d) // light recoils upward
-            }
-            g.drawImage(
-              video,
-              i * svw, 0, svw, vh,
-              dx0 + (i * dw) / SLICES, dy0 + off, dw / SLICES + 1, dh,
-            )
-          }
+        if (hover.current) {
+          driftX += (hover.current.x - 0.5) * w * 0.03
+          driftY += (hover.current.y - 0.5) * h * 0.02
         }
+        g.globalAlpha = 0.5 * breathe
+        g.drawImage(
+          video,
+          (w - dw) / 2 + driftX,
+          (h - dh) / 2 - h * 0.06 + driftY,
+          dw,
+          dh,
+        )
       } else {
         for (let i = 0; i < AURORA.length; i++) {
           const a = AURORA[i]
