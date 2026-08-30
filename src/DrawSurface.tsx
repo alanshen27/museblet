@@ -3,7 +3,7 @@ import type { Stroke } from './music'
 import { getPen } from './pens'
 import { playExplosion } from './audio'
 import { getStrokeTexture } from './textures'
-import { SIGIL_GOLD, SIGIL_JADE, sigilFor } from './sigils'
+import { SIGIL_GLYPHS, SIGIL_GOLD, SIGIL_JADE, SIGIL_PALE, sigilFor } from './sigils'
 
 export interface DrawPoint {
   x: number
@@ -554,6 +554,34 @@ export default function DrawSurface({
           gg.globalAlpha = 0.1 + f2 * 0.3
           gg.fillRect(gx, gy, 1, 1 + f1 * 2)
         }
+        // the field answers the hands: cursors and live stroke tips pour
+        // energy into the feedback buffer, so light bleeds and smears
+        // outward from wherever you are working
+        const sources: { x: number; y: number; a: number; c: string }[] = []
+        for (const c of cursors.current) {
+          if (c.kind === 'thumb') continue
+          sources.push({
+            x: c.x,
+            y: c.y,
+            a: c.active ? 0.28 : 0.08 + (c.strength ?? 0) * 0.1,
+            c: (c.id ?? 0) % 2 === 1 ? '#2e4a3c' : '#54401c',
+          })
+        }
+        for (const s of activeStrokes.current.values()) {
+          const p = s.points[s.points.length - 1]
+          if (p) sources.push({ x: p.x, y: p.y, a: 0.2, c: '#4a3a1a' })
+        }
+        for (const src of sources) {
+          const sx = src.x * gw
+          const sy = src.y * gh
+          const rr = gw * 0.14
+          const grad = gg.createRadialGradient(sx, sy, 0, sx, sy, rr)
+          grad.addColorStop(0, src.c)
+          grad.addColorStop(1, `${src.c}00`)
+          gg.globalAlpha = src.a
+          gg.fillStyle = grad
+          gg.fillRect(sx - rr, sy - rr, rr * 2, rr * 2)
+        }
       }
       // blit up, soft-blurred, additively — grain becomes breathing haze
       g.save()
@@ -750,6 +778,21 @@ export default function DrawSurface({
           d.vx += (dx / dist) * f
           d.vy += (dy / dist) * f
           disturbed = Math.max(disturbed, 1 - dist / DOT_PUSH_R)
+        }
+      }
+      // conjuring crushes space: dots inside a wide gravity well get
+      // dragged toward the rip instead of pushed away
+      for (const c of cursors.current) {
+        if (!c.active) continue
+        const dx = c.x * w - (hx + d.ox)
+        const dy = c.y * h - (hy + d.oy)
+        const dist = Math.hypot(dx, dy)
+        const GR = DOT_PUSH_R * 3
+        if (dist < GR && dist > 24) {
+          const f = (1 - dist / GR) ** 2 * 1.6
+          d.vx += (dx / dist) * f
+          d.vy += (dy / dist) * f
+          disturbed = Math.max(disturbed, (1 - dist / GR) * 0.8)
         }
       }
       // idle: wander on a smooth noise map that itself drifts over time
@@ -1409,25 +1452,42 @@ export default function DrawSurface({
         g.arc(cx, cy, r + 26 * (1 - s), 0, Math.PI * 2)
         g.stroke()
       } else {
-        // lit: a conjuring seal cast around the hand — each material has
-        // its own generated magic-circle artwork (gold arcane hexagram /
-        // jade bagua), rotating at true hand scale, additive so the black
-        // ground of the artwork vanishes into the room
+        // lit: a multilayer conjuring seal — independent strata spinning
+        // at their own speeds and depths, Strange-style, over a rip in
+        // space where the pinch crushes the fabric of the room
         const R = Math.min(
           Math.min(w, h) * 0.15,
           Math.max(r + 14, (c.size ?? 0.12) * Math.min(w, h) * 0.55),
         )
-        const spin = now / 2400
+        const breathe = 1 + 0.04 * Math.sin(now / 480 + (c.id ?? 0))
         const jade = (c.id ?? 1000) % 2 === 1
-        const img = sigilFor(jade ? SIGIL_JADE : SIGIL_GOLD)
-        if (img) {
+        const outer = sigilFor(jade ? SIGIL_JADE : SIGIL_GOLD)
+        const glyphs = sigilFor(SIGIL_GLYPHS)
+        const disc = sigilFor(SIGIL_PALE)
+        // depth 0: a soft bloom of light welling up beneath the seal
+        softMote(g, cx, cy, R * 1.5, c.color, 0.16, 0.08)
+        const layer = (
+          img: HTMLImageElement | null,
+          scale: number,
+          rot: number,
+          alpha: number,
+        ) => {
+          if (!img) return
+          const LR = R * scale * breathe
           g.save()
           g.translate(cx, cy)
-          g.rotate(jade ? -spin * 0.8 : spin)
-          g.globalAlpha = 0.85
-          g.drawImage(img, -R, -R, R * 2, R * 2)
+          g.rotate(rot)
+          g.globalAlpha = alpha
+          g.drawImage(img, -LR, -LR, LR * 2, LR * 2)
           g.restore()
-        } else {
+        }
+        // depth 1: the outer wispy energy ring, slow
+        layer(outer, 1, (jade ? -1 : 1) * (now / 2600), 0.9)
+        // depth 2: counter-rotating ring of arcane script
+        layer(glyphs, 0.64, (jade ? 1 : -1) * (now / 1500), 0.55)
+        // depth 3: a small pale disc whirling fast at the palm
+        layer(disc, 0.32, now / 600, 0.65)
+        if (!outer) {
           g.strokeStyle = c.color
           g.shadowColor = c.color
           g.shadowBlur = 14
@@ -1438,13 +1498,45 @@ export default function DrawSurface({
           g.stroke()
           g.shadowBlur = 0
         }
-        // a bright halo ring hugging the seal's rim
-        g.globalAlpha = 0.4
-        g.strokeStyle = c.color
-        g.lineWidth = 1.2
+        // the rip: a jagged luminous fissure torn through the seal's
+        // heart, its teeth trembling as the pinch crushes space
+        const seed = (c.id ?? 0) * 13.7
+        const ripA = seed % Math.PI
+        const ripL = R * 0.85
+        const teeth = 7
+        g.save()
+        g.rotate(0)
         g.beginPath()
-        g.arc(cx, cy, R * 1.02, 0, Math.PI * 2)
+        for (let i = 0; i <= teeth; i++) {
+          const f = i / teeth - 0.5
+          const wob =
+            Math.sin(i * 2.7 + seed) * 0.16 + Math.sin(now / 130 + i * 1.9) * 0.05
+          const rx = cx + Math.cos(ripA) * f * ripL * 2 - Math.sin(ripA) * wob * R
+          const ry = cy + Math.sin(ripA) * f * ripL * 2 + Math.cos(ripA) * wob * R
+          if (i === 0) g.moveTo(rx, ry)
+          else g.lineTo(rx, ry)
+        }
+        g.strokeStyle = '#fffaf0'
+        g.shadowColor = c.color
+        g.shadowBlur = 18
+        g.lineWidth = 1.6 + 0.8 * Math.sin(now / 90)
+        g.globalAlpha = 0.85
         g.stroke()
+        g.shadowBlur = 0
+        g.restore()
+        // orbiting spark trails circling between the strata
+        for (let i = 0; i < 3; i++) {
+          const oa = now / (700 + i * 260) + (i * Math.PI * 2) / 3 + seed
+          const orr = R * (0.45 + i * 0.24)
+          softMote(
+            g,
+            cx + Math.cos(oa) * orr,
+            cy + Math.sin(oa) * orr,
+            3.5,
+            i === 1 ? '#fffaf0' : c.color,
+            0.7,
+          )
+        }
       }
     }
 
