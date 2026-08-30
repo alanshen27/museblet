@@ -11,6 +11,7 @@ import type {
 } from './DrawSurface'
 import { getPen } from './pens'
 import { setSummon, stopSummon, summonComplete } from './audio'
+import { SIGIL_MOON, sigilFor } from './sigils'
 
 const WASM_BASE =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm'
@@ -196,6 +197,17 @@ export default function HandLayer({ surface }: Props) {
         const breathe = 0.8 + 0.2 * Math.sin(now / 600)
         g.save()
         g.globalCompositeOperation = 'lighter'
+        // the celestial summoning circle turns slowly beneath the guide
+        const moon = sigilFor(SIGIL_MOON)
+        if (moon) {
+          const SR = s * 2.5
+          g.save()
+          g.translate(cx, cy)
+          g.rotate(now / 14000)
+          g.globalAlpha = (0.22 + p * 0.5) * breathe
+          g.drawImage(moon, -SR, -SR, SR * 2, SR * 2)
+          g.restore()
+        }
         g.strokeStyle = '#e8c47a'
         g.shadowColor = '#e8c47a'
         g.shadowBlur = 16
@@ -238,8 +250,13 @@ export default function HandLayer({ surface }: Props) {
 
       if (!res) return
       res.landmarks.forEach((lm, hand) => {
-        const px = (i: number) => zoom(1 - lm[i].x) * W
-        const py = (i: number) => zoom(lm[i].y) * H
+        // anchor at the palm's canvas position, but keep the skeleton's
+        // own geometry at true camera scale — mapping every joint through
+        // the wide-reach crop stretched the hand to giant proportions
+        const ax = zoom(1 - lm[MIDDLE_MCP].x) * W
+        const ay = zoom(lm[MIDDLE_MCP].y) * H
+        const px = (i: number) => ax + (lm[MIDDLE_MCP].x - lm[i].x) * W * 0.72
+        const py = (i: number) => ay + (lm[i].y - lm[MIDDLE_MCP].y) * H * 0.72
         const pen = getPen(HAND_PENS[hand % HAND_PENS.length])
         const s = hands.get(hand)
         g.save()

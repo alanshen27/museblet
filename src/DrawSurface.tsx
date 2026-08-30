@@ -3,6 +3,7 @@ import type { Stroke } from './music'
 import { getPen } from './pens'
 import { playExplosion } from './audio'
 import { getStrokeTexture } from './textures'
+import { SIGIL_GOLD, SIGIL_JADE, sigilFor } from './sigils'
 
 export interface DrawPoint {
   x: number
@@ -331,6 +332,10 @@ export default function DrawSurface({
   const blobs = useRef<Blob_[]>([])
   const dust = useRef<Dust[]>([])
   const boids = useRef<Boid[]>([])
+  // TouchDesigner-style grain field: a low-res feedback buffer where
+  // colour clouds smear frame-over-frame and displaced grain rains
+  // through them, blitted up soft-blurred behind everything
+  const grainCv = useRef<HTMLCanvasElement | null>(null)
   const fieldDots = useRef<FieldDot[]>([])
   const fieldSize = useRef({ w: 0, h: 0 })
   const hover = useRef<{ x: number; y: number } | null>(null)
@@ -496,6 +501,70 @@ export default function DrawSurface({
     const now = performance.now()
 
     g.clearRect(0, 0, w, h)
+
+    {
+      const gw = Math.max(2, w >> 2)
+      const gh = Math.max(2, h >> 2)
+      let cv = grainCv.current
+      if (!cv || cv.width !== gw || cv.height !== gh) {
+        cv = document.createElement('canvas')
+        cv.width = gw
+        cv.height = gh
+        grainCv.current = cv
+      }
+      const gg = cv.getContext('2d')
+      if (gg) {
+        const t = now / 1000
+        // feedback decay: yesterday's frame lingers as a smeared ghost
+        gg.globalCompositeOperation = 'source-over'
+        gg.globalAlpha = 1
+        gg.fillStyle = 'rgba(6,7,10,0.075)'
+        gg.fillRect(0, 0, gw, gh)
+        gg.globalCompositeOperation = 'lighter'
+        // slow colour clouds — the blurred masses the grain falls through
+        const clouds = [
+          { c: '#3a2e18', r: 0.5, sx: 0.21, sy: 0.13, ph: 0 },
+          { c: '#16281f', r: 0.42, sx: 0.16, sy: 0.19, ph: 2.4 },
+          { c: '#181e2c', r: 0.55, sx: 0.11, sy: 0.09, ph: 4.4 },
+        ]
+        for (const cl of clouds) {
+          const cx = (0.5 + 0.36 * Math.sin(t * cl.sx + cl.ph)) * gw
+          const cy = (0.5 + 0.32 * Math.cos(t * cl.sy + cl.ph * 1.7)) * gh
+          const rr = cl.r * Math.min(gw, gh)
+          const grad = gg.createRadialGradient(cx, cy, 0, cx, cy, rr)
+          grad.addColorStop(0, cl.c)
+          grad.addColorStop(1, `${cl.c}00`)
+          gg.globalAlpha = 0.05
+          gg.fillStyle = grad
+          gg.fillRect(0, 0, gw, gh)
+        }
+        // grain rain: specks streaming down noise-displaced columns, the
+        // displacement wobbling over time like a TD noise TOP
+        gg.globalAlpha = 0.5
+        for (let i = 0; i < 180; i++) {
+          const r1 = Math.sin(i * 127.1 + Math.floor(t * 9) * 311.7) * 43758.5453
+          const f1 = r1 - Math.floor(r1)
+          const r2 = Math.sin(i * 269.5 + Math.floor(t * 9) * 183.3) * 28001.83
+          const f2 = r2 - Math.floor(r2)
+          const gx =
+            (f1 + 0.08 * Math.sin(t * 0.7 + f2 * 12 + f1 * 5)) * gw
+          const gy = ((f2 + t * 0.045) % 1) * gh
+          const warm = f1 * 3 % 1 < 0.55
+          gg.fillStyle = warm ? '#8a6f3c' : '#4d6b5c'
+          gg.globalAlpha = 0.1 + f2 * 0.3
+          gg.fillRect(gx, gy, 1, 1 + f1 * 2)
+        }
+      }
+      // blit up, soft-blurred, additively — grain becomes breathing haze
+      g.save()
+      g.globalCompositeOperation = 'lighter'
+      g.globalAlpha = 0.85
+      g.filter = 'blur(1.5px)'
+      g.imageSmoothingEnabled = true
+      g.drawImage(cv, 0, 0, w, h)
+      g.filter = 'none'
+      g.restore()
+    }
 
     // generative backdrop: aurora curtains drifting high in the dark,
     // ocean swells breathing along the bottom — barely-there light
@@ -1340,48 +1409,42 @@ export default function DrawSurface({
         g.arc(cx, cy, r + 26 * (1 - s), 0, Math.PI * 2)
         g.stroke()
       } else {
-        // lit: a hand-sized rune circle — rotating mandala rings with
-        // spokes and ticks, like a conjuring seal cast around the hand
-        const R = Math.max(r + 14, (c.size ?? 0.1) * Math.min(w, h) * 1.5)
+        // lit: a conjuring seal cast around the hand — each material has
+        // its own generated magic-circle artwork (gold arcane hexagram /
+        // jade bagua), rotating at true hand scale, additive so the black
+        // ground of the artwork vanishes into the room
+        const R = Math.min(
+          Math.min(w, h) * 0.15,
+          Math.max(r + 14, (c.size ?? 0.12) * Math.min(w, h) * 0.55),
+        )
         const spin = now / 2400
-        g.strokeStyle = c.color
-        g.shadowColor = c.color
-        g.shadowBlur = 14
-        g.globalAlpha = 0.75
-        g.lineWidth = 1.8
-        g.beginPath()
-        g.arc(cx, cy, R, 0, Math.PI * 2)
-        g.stroke()
-        g.globalAlpha = 0.45
-        g.lineWidth = 1
-        g.beginPath()
-        g.arc(cx, cy, R * 0.78, 0, Math.PI * 2)
-        g.stroke()
-        // rotating tick marks around the outer band
-        g.globalAlpha = 0.7
-        for (let i = 0; i < 24; i++) {
-          const a = spin + (i / 24) * Math.PI * 2
-          const long = i % 6 === 0
-          const r0 = R * (long ? 0.88 : 0.93)
-          g.lineWidth = long ? 1.8 : 1
+        const jade = (c.id ?? 1000) % 2 === 1
+        const img = sigilFor(jade ? SIGIL_JADE : SIGIL_GOLD)
+        if (img) {
+          g.save()
+          g.translate(cx, cy)
+          g.rotate(jade ? -spin * 0.8 : spin)
+          g.globalAlpha = 0.85
+          g.drawImage(img, -R, -R, R * 2, R * 2)
+          g.restore()
+        } else {
+          g.strokeStyle = c.color
+          g.shadowColor = c.color
+          g.shadowBlur = 14
+          g.globalAlpha = 0.75
+          g.lineWidth = 1.8
           g.beginPath()
-          g.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0)
-          g.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R)
+          g.arc(cx, cy, R, 0, Math.PI * 2)
           g.stroke()
+          g.shadowBlur = 0
         }
-        // counter-rotating inner triangle — the sigil's core geometry
-        g.globalAlpha = 0.5
+        // a bright halo ring hugging the seal's rim
+        g.globalAlpha = 0.4
+        g.strokeStyle = c.color
         g.lineWidth = 1.2
         g.beginPath()
-        for (let i = 0; i <= 3; i++) {
-          const a = -spin * 1.7 + (i / 3) * Math.PI * 2
-          const x2 = cx + Math.cos(a) * R * 0.62
-          const y2 = cy + Math.sin(a) * R * 0.62
-          if (i === 0) g.moveTo(x2, y2)
-          else g.lineTo(x2, y2)
-        }
+        g.arc(cx, cy, R * 1.02, 0, Math.PI * 2)
         g.stroke()
-        g.shadowBlur = 0
       }
     }
 
