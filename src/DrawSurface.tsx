@@ -1060,40 +1060,61 @@ export default function DrawSurface({
       {
         const flickFrame = Math.floor(now / 80)
         const step = Math.max(1, Math.floor(n / 30))
-        const bolt: { x: number; y: number; nx: number; ny: number }[] = []
-        for (let i = 0; i < n; i += step) {
-          const p = pts[i]
-          const prev = pts[Math.max(0, i - step)]
-          const nxt = pts[Math.min(n - 1, i + step)]
-          let dx = (nxt.x - prev.x) * w
-          let dy = (nxt.y - prev.y) * h
-          const len = Math.hypot(dx, dy) || 1
-          dx /= len
-          dy /= len
-          const r1 = Math.sin(i * 91.7 + s.bornAt + flickFrame * 37.3) * 43758.5453
-          const f1 = r1 - Math.floor(r1)
-          const edge = Math.sin((Math.min(i, n - 1) / (n - 1)) * Math.PI)
-          const jag = (f1 - 0.5) * 34 * edge
-          bolt.push({
-            x: p.x * w - dy * jag,
-            y: p.y * h + dx * jag,
-            nx: -dy,
-            ny: dx,
-          })
+        // several independent bolts stacked on the same path, each with
+        // its own jag seed, amplitude and flicker rate, so the stroke
+        // reads as a braid of crackling arcs rather than one thin line
+        const makeBolt = (seed: number, amp: number, rate: number) => {
+          const arr: { x: number; y: number; nx: number; ny: number }[] = []
+          const ff = Math.floor(now / rate)
+          for (let i = 0; i < n; i += step) {
+            const p = pts[i]
+            const prev = pts[Math.max(0, i - step)]
+            const nxt = pts[Math.min(n - 1, i + step)]
+            let dx = (nxt.x - prev.x) * w
+            let dy = (nxt.y - prev.y) * h
+            const len = Math.hypot(dx, dy) || 1
+            dx /= len
+            dy /= len
+            const r1 =
+              Math.sin(i * 91.7 + seed + s.bornAt + ff * 37.3) * 43758.5453
+            const f1 = r1 - Math.floor(r1)
+            const edge = Math.sin((Math.min(i, n - 1) / (n - 1)) * Math.PI)
+            const jag = (f1 - 0.5) * amp * edge
+            arr.push({
+              x: p.x * w - dy * jag,
+              y: p.y * h + dx * jag,
+              nx: -dy,
+              ny: dx,
+            })
+          }
+          arr.push({ x: pts[n - 1].x * w, y: pts[n - 1].y * h, nx: 0, ny: 0 })
+          return arr
         }
-        bolt.push({ x: pts[n - 1].x * w, y: pts[n - 1].y * h, nx: 0, ny: 0 })
+        const bolt = makeBolt(0, 34, 80)
+        const bolt2 = makeBolt(57.31, 52, 110)
+        const bolt3 = makeBolt(113.7, 22, 60)
         if (bolt.length > 2) {
           g.lineJoin = 'miter'
           g.lineCap = 'round'
-          const drawBolt = () => {
+          const drawPath = (b: typeof bolt) => {
             g.beginPath()
-            g.moveTo(bolt[0].x, bolt[0].y)
-            for (let i = 1; i < bolt.length; i++) g.lineTo(bolt[i].x, bolt[i].y)
+            g.moveTo(b[0].x, b[0].y)
+            for (let i = 1; i < b.length; i++) g.lineTo(b[i].x, b[i].y)
             g.stroke()
           }
-          // wide electric aura around the bolt
+          const drawBolt = () => drawPath(bolt)
+          // outer stray arcs: wider, dimmer siblings flickering around
+          // the main channel
           g.strokeStyle = cA
           g.shadowColor = cA
+          g.shadowBlur = 24
+          g.lineWidth = 2.2
+          g.globalAlpha = alpha * 0.28
+          drawPath(bolt2)
+          g.lineWidth = 1.4
+          g.globalAlpha = alpha * 0.4
+          drawPath(bolt3)
+          // wide electric aura around the main bolt
           g.shadowBlur = 30
           g.lineWidth = 6
           g.globalAlpha = alpha * 0.35
@@ -1102,8 +1123,13 @@ export default function DrawSurface({
           g.lineWidth = 3.2
           g.globalAlpha = alpha * 0.6
           drawBolt()
-          // the white-hot core
+          // hot cores: the tight inner sibling gets one too, so the braid
+          // reads as multiple filaments of lightning
           g.strokeStyle = '#fffdf5'
+          g.shadowBlur = 6
+          g.lineWidth = 1
+          g.globalAlpha = alpha * 0.55
+          drawPath(bolt3)
           g.shadowBlur = 8
           g.lineWidth = 1.8
           g.globalAlpha = alpha
@@ -1539,6 +1565,9 @@ export default function DrawSurface({
           g.translate(cx, cy)
           g.rotate(rot)
           g.globalAlpha = alpha
+          // the ring videos live on solid black grounds: screen-blend them
+          // so only the luminous linework lands on the room
+          g.globalCompositeOperation = 'screen'
           g.filter = filt
           g.drawImage(img, -LR, -LR, LR * 2, LR * 2)
           g.filter = 'none'

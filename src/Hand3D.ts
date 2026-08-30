@@ -78,7 +78,7 @@ const JOINT_NEXT: Record<string, string> = {
 interface HandRig {
   root: THREE.Object3D
   bones: Map<string, THREE.Object3D>
-  material: THREE.MeshBasicMaterial
+  color: THREE.Color
 }
 
 export class Hand3DLayer {
@@ -109,13 +109,32 @@ export class Hand3DLayer {
     this.loader.load(url, (gltf) => {
       const root = gltf.scene
       const bones = new Map<string, THREE.Object3D>()
-      const material = new THREE.MeshBasicMaterial({
-        color: 0xffffff,
+      // hologram material: a fresnel rim so only the silhouette edges
+      // burn bright and the body stays a faint veil of energy
+      const color = new THREE.Color(0xffffff)
+      const material = new THREE.MeshStandardMaterial({
         transparent: true,
-        opacity: 0.32,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
+        side: THREE.DoubleSide,
       })
+      material.onBeforeCompile = (shader) => {
+        shader.uniforms.uColor = { value: color }
+        shader.fragmentShader = shader.fragmentShader
+          .replace(
+            '#include <common>',
+            '#include <common>\nuniform vec3 uColor;',
+          )
+          .replace(
+            '#include <dithering_fragment>',
+            [
+              '#include <dithering_fragment>',
+              'float rim = pow(1.0 - abs(normalize(vNormal).z), 2.2);',
+              'gl_FragColor.rgb = uColor * (0.10 + 1.7 * rim) + vec3(0.5) * rim * rim;',
+              'gl_FragColor.a = 0.10 + 0.9 * rim;',
+            ].join('\n'),
+          )
+      }
       root.traverse((o) => {
         const bone = o as THREE.Bone
         if (bone.isBone || JOINT_MAP[o.name] !== undefined) {
@@ -127,8 +146,16 @@ export class Hand3DLayer {
           mesh.frustumCulled = false
         }
       })
+      // the update loop poses every joint in root space; flatten the bone
+      // hierarchy so those absolute transforms aren't re-composed through
+      // parent bones (which crumpled the mesh whenever fingers curled —
+      // skinning only reads the bones' world matrices, so this is safe)
+      for (const name of Object.keys(JOINT_MAP)) {
+        const bone = bones.get(name)
+        if (bone) root.add(bone)
+      }
       this.scene.add(root)
-      this.rigs[slot] = { root, bones, material }
+      this.rigs[slot] = { root, bones, color }
     })
   }
 
@@ -154,7 +181,7 @@ export class Hand3DLayer {
       }
       if (rig === 'loading') continue
       rig.root.visible = true
-      rig.material.color.set(f.color)
+      rig.color.set(f.color)
 
       // bones must live at the model's own (metre) scale or the skin
       // stretches: normalise so wrist->middle-knuckle is a real hand's

@@ -24,6 +24,8 @@ const THUMB_TIP = 4
 const INDEX_TIP = 8
 const WRIST = 0
 const MIDDLE_MCP = 9
+const INDEX_MCP = 5
+const PINKY_MCP = 17
 
 // bone chains for the hand-skeleton overlay
 const BONES = [
@@ -386,7 +388,16 @@ export default function HandLayer({ surface }: Props) {
         const tip = lm[INDEX_TIP]
         const wrist = lm[WRIST]
         const mcp = lm[MIDDLE_MCP]
-        const palm = Math.hypot(wrist.x - mcp.x, wrist.y - mcp.y)
+        // palm size normalizes the pinch: take the larger of two spans so
+        // a tilted hand (which foreshortens wrist->knuckle) doesn't shrink
+        // the reference and make pinches impossible to trigger
+        const palm = Math.max(
+          Math.hypot(wrist.x - mcp.x, wrist.y - mcp.y),
+          Math.hypot(
+            lm[INDEX_MCP].x - lm[PINKY_MCP].x,
+            lm[INDEX_MCP].y - lm[PINKY_MCP].y,
+          ) * 1.35,
+        )
 
         const rawX = zoom(1 - tip.x)
         const rawY = zoom(tip.y)
