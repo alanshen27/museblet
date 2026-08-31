@@ -382,6 +382,14 @@ export default function DrawSurface({
   const grainCv = useRef<HTMLCanvasElement | null>(null)
   const hover = useRef<{ x: number; y: number } | null>(null)
   const frameCount = useRef(0)
+  // per-finger motion memory so the seal can lean into the hand's travel:
+  // smoothed velocity plus an eased 3D tilt (direction + magnitude)
+  const cursorVel = useRef(
+    new Map<
+      number,
+      { px: number; py: number; t: number; vx: number; vy: number; tiltA: number; tiltM: number }
+    >(),
+  )
   const shoots = useRef<
     { x: number; y: number; vx: number; vy: number; life: number }[]
   >([])
@@ -1609,6 +1617,26 @@ export default function DrawSurface({
         continue
       }
       const s = c.strength ?? 0
+      // motion memory: smoothed velocity drives the inner ring's 3D lean
+      let vel = cursorVel.current.get(c.id ?? -1)
+      if (!vel) {
+        vel = { px: cx, py: cy, t: now, vx: 0, vy: 0, tiltA: 0, tiltM: 0 }
+        cursorVel.current.set(c.id ?? -1, vel)
+      }
+      const vdt = Math.max(8, now - vel.t)
+      vel.vx += (((cx - vel.px) / vdt) * 1000 - vel.vx) * 0.2
+      vel.vy += (((cy - vel.py) / vdt) * 1000 - vel.vy) * 0.2
+      vel.px = cx
+      vel.py = cy
+      vel.t = now
+      const speed = Math.hypot(vel.vx, vel.vy)
+      const targetM = Math.min(1.05, speed / 900)
+      const targetA = speed > 30 ? Math.atan2(vel.vy, vel.vx) : vel.tiltA
+      let dA = targetA - vel.tiltA
+      while (dA > Math.PI) dA -= Math.PI * 2
+      while (dA < -Math.PI) dA += Math.PI * 2
+      vel.tiltA += dA * 0.15
+      vel.tiltM += (targetM - vel.tiltM) * 0.12
       // beat envelope: the orb throbs on every note this finger plays
       const np = c.id !== undefined ? notePulses.current.get(c.id) : undefined
       const beat = np ? Math.max(0, 1 - (now - np.t) / 350) * np.s : 0
@@ -1656,11 +1684,19 @@ export default function DrawSurface({
           rot: number,
           alpha: number,
           filt = 'none',
+          tilt = 0,
         ) => {
           if (!img) return
           const LR = R * scale * breathe
           g.save()
           g.translate(cx, cy)
+          if (tilt > 0.02) {
+            // fake 3D: foreshorten the ring along the travel direction so it
+            // tips over like a coin spun by the hand's momentum
+            g.rotate(vel.tiltA)
+            g.scale(1, Math.max(0.25, Math.cos(tilt)))
+            g.rotate(-vel.tiltA)
+          }
           g.rotate(rot)
           g.globalAlpha = alpha
           // the ring videos live on solid black grounds: screen-blend them
@@ -1685,14 +1721,14 @@ export default function DrawSurface({
         // by image-to-video, counter-spinning against the outer ring
         const midVideo = sealMidVideoFor(jade)
         if (midVideo) {
-          layer(midVideo, 0.86, (jade ? 1 : -1) * (now / 3400), 0.7)
+          layer(midVideo, 0.86, (jade ? 1 : -1) * (now / 3400), 0.7, 'none', vel.tiltM)
         }
         // depth 3: counter-rotating ring of arcane script
         layer(glyphs, 0.64, (jade ? 1 : -1) * (now / 1500), 0.55, tint)
         // depth 4: a second faint script ring drifting the other way
         layer(glyphs, 0.48, (jade ? -1 : 1) * (now / 2100) + 0.7, 0.3, tint)
         // depth 5: a small pale disc whirling fast at the palm
-        layer(disc, 0.32, now / 600, 0.65, tint)
+        layer(disc, 0.32, now / 600, 0.65, tint, vel.tiltM * 1.3)
         // the rip: a jagged luminous fissure torn through the seal's
         // heart, its teeth trembling as the pinch crushes space
         const seed = (c.id ?? 0) * 13.7
