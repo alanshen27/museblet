@@ -130,8 +130,8 @@ export class Hand3DLayer {
             [
               '#include <dithering_fragment>',
               'float rim = pow(1.0 - abs(normalize(vNormal).z), 2.2);',
-              'gl_FragColor.rgb = uColor * (0.10 + 1.7 * rim) + vec3(0.5) * rim * rim;',
-              'gl_FragColor.a = 0.10 + 0.9 * rim;',
+              'gl_FragColor.rgb = uColor * (0.38 + 1.7 * rim) + vec3(0.5) * rim * rim;',
+              'gl_FragColor.a = 0.45 + 0.55 * rim;',
             ].join('\n'),
           )
       }

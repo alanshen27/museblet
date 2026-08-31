@@ -16,6 +16,8 @@ import sealGoldAUrl from './assets/seal_gold_a.webm'
 import sealGoldBUrl from './assets/seal_gold_b.webm'
 import sealJadeAUrl from './assets/seal_jade_a.webm'
 import sealJadeBUrl from './assets/seal_jade_b.webm'
+import sealMidGoldUrl from './assets/seal_mid_gold.webm'
+import sealMidJadeUrl from './assets/seal_mid_jade.webm'
 
 function makeLoopVideo(src: string): HTMLVideoElement {
   const v = document.createElement('video')
@@ -44,6 +46,17 @@ function sealVideoFor(jade: boolean, id: number): HTMLVideoElement | null {
     ]
   }
   const v = sealVideos[jade ? 1 : 0][Math.floor(id / 2) % 2]
+  return v.readyState >= 2 ? v : null
+}
+
+// mid strata: one designed still layer per family, animated with
+// image-to-video, spinning between the outer ring and the script disc
+let sealMidVideos: [HTMLVideoElement, HTMLVideoElement] | null = null
+function sealMidVideoFor(jade: boolean): HTMLVideoElement | null {
+  if (!sealMidVideos) {
+    sealMidVideos = [makeLoopVideo(sealMidGoldUrl), makeLoopVideo(sealMidJadeUrl)]
+  }
+  const v = sealMidVideos[jade ? 1 : 0]
   return v.readyState >= 2 ? v : null
 }
 
@@ -567,6 +580,20 @@ export default function DrawSurface({
           gg.fillStyle = grad
           gg.fillRect(0, 0, gw, gh)
         }
+        // the room answers the duel: active seals and live stroke tips
+        // become forces the background feels
+        const pulls: { x: number; y: number; s: number }[] = []
+        for (const c of cursors.current) {
+          if (c.kind === 'thumb') continue
+          if (c.active) pulls.push({ x: c.x, y: c.y, s: 1 })
+          else if ((c.strength ?? 0) > 0.3)
+            pulls.push({ x: c.x, y: c.y, s: (c.strength ?? 0) * 0.5 })
+        }
+        for (const s of activeStrokes.current.values()) {
+          const p = s.points[s.points.length - 1]
+          if (p) pulls.push({ x: p.x, y: p.y, s: 0.8 })
+        }
+        const castEnergy = Math.min(1, pulls.reduce((a, p) => a + p.s, 0) / 2)
         // distant galaxies: faint tilted elliptical smudges deep in the room
         const galaxies = [
           { x: 0.22, y: 0.3, r: 0.16, a: 0.05, tilt: 0.6, c: '#6b5a36' },
@@ -585,7 +612,12 @@ export default function DrawSurface({
           grad.addColorStop(0, ga.c)
           grad.addColorStop(0.35, `${ga.c}66`)
           grad.addColorStop(1, `${ga.c}00`)
-          gg.globalAlpha = ga.a * (0.8 + 0.2 * Math.sin(t * 0.11 + ga.tilt * 5))
+          // galaxies flare while a cast is alive, like the deep room
+          // catching the light of the duel
+          gg.globalAlpha =
+            ga.a *
+            (0.8 + 0.2 * Math.sin(t * 0.11 + ga.tilt * 5)) *
+            (1 + castEnergy * (1.6 + 0.5 * Math.sin(t * 5 + ga.tilt)))
           gg.fillStyle = grad
           gg.fillRect(-rr, -rr, rr * 2, rr * 2)
           gg.restore()
@@ -599,18 +631,40 @@ export default function DrawSurface({
           const f2 = r2 - Math.floor(r2)
           const star = i % 3 === 0
           if (star) {
-            // stars hold still and twinkle
-            const gx = f1 * gw
-            const gy = f2 * gh
+            // stars hold still and twinkle — but ripple away from a cast,
+            // shoved outward by the pressure of the spell
+            let gx = f1 * gw
+            let gy = f2 * gh
+            for (const p of pulls) {
+              const dx = gx - p.x * gw
+              const dy = gy - p.y * gh
+              const d = Math.hypot(dx, dy) + 1
+              const push = (p.s * gw * 2.2) / (d * d) // inverse-square shove
+              gx += (dx / d) * Math.min(push, 8) * gw * 0.01
+              gy += (dy / d) * Math.min(push, 8) * gw * 0.01
+            }
             const tw = 0.5 + 0.5 * Math.sin(t * (0.6 + f1 * 2.2) + i)
             gg.fillStyle = f2 > 0.85 ? '#e8dcc0' : '#b9c4bc'
             gg.globalAlpha = (0.04 + f1 * 0.14) * tw
             gg.fillRect(gx, gy, 1, 1)
           } else {
             // embers rise and sway like sparks off a distant fire
-            const gx =
+            let gx =
               (f1 + 0.05 * Math.sin(t * 0.5 + f2 * 12 + f1 * 5)) * gw
-            const gy = ((f2 - t * (0.012 + f1 * 0.02)) % 1 + 1) % 1 * gh
+            let gy = ((f2 - t * (0.012 + f1 * 0.02)) % 1 + 1) % 1 * gh
+            // an active seal drinks the embers: nearby ones bend toward
+            // it and streak as they are drawn into the cast
+            for (const p of pulls) {
+              const dx = p.x * gw - gx
+              const dy = p.y * gh - gy
+              const d = Math.hypot(dx, dy) + 1
+              const reach = gw * 0.32
+              if (d < reach) {
+                const pull = p.s * (1 - d / reach) * 0.55
+                gx += dx * pull
+                gy += dy * pull
+              }
+            }
             const flicker = 0.6 + 0.4 * Math.sin(t * (2 + f1 * 5) + i)
             const hot = (f1 * 7) % 1 < 0.08
             gg.fillStyle = hot ? '#ffd9a0' : f1 * 3 % 1 < 0.6 ? '#a2733a' : '#4d6b5c'
@@ -680,8 +734,8 @@ export default function DrawSurface({
         let driftY = 0
         for (const c of cursors.current) {
           if (c.kind === 'thumb') continue
-          driftX += (c.x - 0.5) * w * 0.045
-          driftY += (c.y - 0.5) * h * 0.03
+          driftX += (c.x - 0.5) * w * (c.active ? 0.11 : 0.055)
+          driftY += (c.y - 0.5) * h * (c.active ? 0.075 : 0.038)
         }
         if (hover.current) {
           driftX += (hover.current.x - 0.5) * w * 0.03
@@ -1584,8 +1638,8 @@ export default function DrawSurface({
         // at their own speeds and depths, Strange-style, over a rip in
         // space where the pinch crushes the fabric of the room
         const R = Math.min(
-          Math.min(w, h) * 0.15,
-          Math.max(r + 14, (c.size ?? 0.12) * Math.min(w, h) * 0.55),
+          Math.min(w, h) * 0.23,
+          Math.max(r + 22, (c.size ?? 0.12) * Math.min(w, h) * 0.8),
         )
         const breathe = 1 + 0.04 * Math.sin(now / 480 + (c.id ?? 0))
         const jade = (c.id ?? 1000) % 2 === 1
@@ -1627,9 +1681,17 @@ export default function DrawSurface({
           const outer = sigilFor(jade ? SIGIL_JADE : SIGIL_GOLD)
           layer(outer, 1, (jade ? -1 : 1) * (now / 2600), 0.9)
         }
-        // depth 2: counter-rotating ring of arcane script
+        // depth 2: a mid ring — an AI-designed layer image brought alive
+        // by image-to-video, counter-spinning against the outer ring
+        const midVideo = sealMidVideoFor(jade)
+        if (midVideo) {
+          layer(midVideo, 0.86, (jade ? 1 : -1) * (now / 3400), 0.7)
+        }
+        // depth 3: counter-rotating ring of arcane script
         layer(glyphs, 0.64, (jade ? 1 : -1) * (now / 1500), 0.55, tint)
-        // depth 3: a small pale disc whirling fast at the palm
+        // depth 4: a second faint script ring drifting the other way
+        layer(glyphs, 0.48, (jade ? -1 : 1) * (now / 2100) + 0.7, 0.3, tint)
+        // depth 5: a small pale disc whirling fast at the palm
         layer(disc, 0.32, now / 600, 0.65, tint)
         // the rip: a jagged luminous fissure torn through the seal's
         // heart, its teeth trembling as the pinch crushes space
