@@ -1,262 +1,297 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import DrawSurface, { type DrawHandle } from './DrawSurface'
-import HandLayer from './HandLayer'
-import { glideStop, glideTo, isAwakened, playBellTree, playNote } from './audio'
+import InkSurface, { type DrawHandle, type DrawPoint } from './InkSurface'
+import BodyLayer, { LEFT_HAND, RIGHT_HAND } from './BodyLayer'
+import {
+  breathPitch,
+  brushEnd,
+  brushTo,
+  ensureAudio,
+  gateComplete,
+  isAwakened,
+  playNote,
+  setBody as setAudioBody,
+  setGate as setAudioGate,
+  setScaleName,
+  strike as audioStrike,
+} from './audio'
 import { bindInlet, isMax, outletMessage, outletNote } from './max'
-import { SCALES, strokesToNotes, type NoteEvent, type Stroke } from './music'
-import { chordAt, snapToChord } from './harmony'
-import { pieceState, type Material } from './composition'
-import { type PenId } from './pens'
-// PENS import is only needed by the commented-out dock
-// import { PENS, type PenId } from './pens'
+import { DEFAULT_SCALE, MODE_GLYPH, SCALES, scaleDegree, strokesToNotes, type NoteEvent, type Stroke } from './music'
+import { chordAt } from './harmony'
+import type { BodyState, Phase, Strike } from './sanda'
 import './App.css'
+
+const PHASES: Record<Phase, { pinyin: string; word: string }> = {
+  息: { pinyin: 'xī', word: 'breath' },
+  势: { pinyin: 'shì', word: 'stance' },
+  发: { pinyin: 'fā', word: 'release' },
+  收: { pinyin: 'shōu', word: 'recovery' },
+}
+
+// how long the body must hold still (or the pointer be held) to open the gate
+const GATE_HOLD_MS = 1800
+
+// brush slot → register: the left hand is the low string, the right the
+// high one, the pointer sits between
+const slotOf = (id: number) => (id === LEFT_HAND ? 0 : id === RIGHT_HAND ? 1 : 2)
+const LOW: Record<number, number> = { 0: 43, 1: 55, 2: 48 }
 
 export default function App() {
   const [strokes, setStrokes] = useState<Stroke[]>([])
   const [playing, setPlaying] = useState(false)
-  const [tempo, setTempo] = useState(120)
-  const [scale, setScale] = useState('minor')
-  // dock (bottom bar) commented out — Tab no longer summons it
-  // const [dockOpen, setDockOpen] = useState(false)
-  const [penId] = useState<PenId>('neon')
-  // setPenId lives on the commented-out dock; fist wheel still switches pens per hand
+  const [tempo, setTempo] = useState(96)
+  const [scale, setScale] = useState(DEFAULT_SCALE)
   const [playheadX, setPlayheadX] = useState<number | null>(null)
+  const [phase, setPhase] = useState<Phase>('势')
+  const [meters, setMeters] = useState({ stance: 0, root: 0, breath: 0, energy: 0 })
+  const [gateOpen, setGateOpen] = useState(false)
+  const [gateProgress, setGateProgress] = useState(0)
+  const [bodySeen, setBodySeen] = useState(false)
+  const [hits, setHits] = useState(0)
   const inMax = isMax()
 
+  const surface = useRef<DrawHandle | null>(null)
   const notesRef = useRef<NoteEvent[]>([])
   const strokesRef = useRef(strokes)
   strokesRef.current = strokes
   const scaleRef = useRef(scale)
   scaleRef.current = scale
+  const tempoRef = useRef(tempo)
+  tempoRef.current = tempo
   const loopMsRef = useRef(0)
   const rafRef = useRef(0)
   const startRef = useRef(0)
   const lastLoopRef = useRef(-1)
   const firedRef = useRef<Set<NoteEvent>>(new Set())
+  const gateOpenRef = useRef(false)
+  const gateStartRef = useRef(0)
+  const pointerHoldRef = useRef<number | null>(null)
+  const lastCtlRef = useRef<Record<string, number>>({})
+  const lastCtlSentRef = useRef(0)
+  const pointerPunchesRef = useRef<number[]>([])
+  const phaseRef = useRef<Phase>('势')
 
-  const loopMs = (60000 / tempo) * 8 // 8 beats per loop
+  const loopMs = (60000 / tempo) * 8
+  const barMs = () => (60000 / tempoRef.current) * 2
+  const centreIndex = (now: number) => Math.floor(now / (barMs() * 4))
 
   const emit = useCallback(
-    (n: NoteEvent) => {
+    (n: NoteEvent, x = 0.5) => {
       if (inMax) outletNote(n.pen, n.midi, n.velocity, n.durationMs)
-      else playNote(n.pen, n.midi, n.velocity, n.durationMs)
+      else playNote(n.pen, n.midi, n.velocity, n.durationMs, x)
     },
     [inMax],
   )
 
-  const lastDrawRef = useRef(0)
-  const tempoRef = useRef(tempo)
-  tempoRef.current = tempo
-  const barMs = () => (60000 / tempoRef.current) * 2
-  // harmony breathes slowly: each chord holds for two bars so the room
-  // never feels like it's chasing changes
-  const chordIndex = (now: number) => Math.floor(now / (barMs() * 2))
+  // ------------------------------------------------------------- gate --
+  const openGate = useCallback(() => {
+    if (gateOpenRef.current) return
+    gateOpenRef.current = true
+    setGateOpen(true)
+    setGateProgress(1)
+    surface.current?.setGate(1, true)
+    if (inMax) outletMessage('gate', 'open')
+    else gateComplete()
+  }, [inMax])
 
-  // ---- the piece: screen as 3D space, sound as materials, time composed --
-  // X = pitch (right high, left low), Y = volume (higher hand = louder),
-  // Z = hand size / depth (near = bright + dry, far = dark + reverberant).
-  // Each hand slot speaks one material — point, line, or plane — chosen by
-  // the composed section timeline in composition.ts. The clock starts on
-  // the first mark; press R to start the piece over.
-  const pieceStartRef = useRef<number | null>(null)
-  const [hud, setHud] = useState<{ label: string; progress: number } | null>(null)
-  // each material has one voice/timbre so the sound image stays legible
-  const MAT_PEN: Record<Material, string> = {
-    line: 'velvet',
-    point: 'ember',
-    plane: 'crystal',
-  }
-  // per-pointer performance state: which hand slot it occupies, the
-  // material it spoke last frame, and its last grain/strum time
-  const perfRef = useRef(
-    new Map<number, { slot: number; lastMat: Material | null; lastHit: number }>(),
-  )
-  const slotOf = (pointerId: number) => {
-    let s = perfRef.current.get(pointerId)
-    if (!s) {
-      const used = new Set([...perfRef.current.values()].map((v) => v.slot))
-      s = { slot: used.has(0) ? 1 : 0, lastMat: null, lastHit: 0 }
-      perfRef.current.set(pointerId, s)
+  useEffect(() => {
+    // hold the pointer anywhere, or press Enter, to open without a camera
+    const down = () => {
+      if (gateOpenRef.current) return
+      pointerHoldRef.current = performance.now()
+      void ensureAudio()
     }
-    return s
+    const up = () => {
+      pointerHoldRef.current = null
+    }
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        void ensureAudio()
+        openGate()
+      }
+    }
+    window.addEventListener('pointerdown', down)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+    window.addEventListener('keydown', key)
+    const id = setInterval(() => {
+      if (gateOpenRef.current || pointerHoldRef.current === null) return
+      const p = Math.min(1, (performance.now() - pointerHoldRef.current) / GATE_HOLD_MS)
+      setGateProgress(p)
+      surface.current?.setGate(p, false)
+      if (!inMax) setAudioGate(p)
+      if (p >= 1) openGate()
+    }, 50)
+    return () => {
+      window.removeEventListener('pointerdown', down)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      window.removeEventListener('keydown', key)
+      clearInterval(id)
+    }
+  }, [inMax, openGate])
+
+  // ------------------------------------------------------- the body --
+  const glyphFor = (s: Strike, rapid: number) => {
+    if (s.kind === 'kick') return '起势'
+    if (rapid >= 3) return '连'
+    if (s.force > 0.8) return '发'
+    return '打'
   }
-  // X axis → scale-quantized pitch above a per-slot floor (Stolet's
-  // Kinetic layout: one hand the low voice, the other the high one)
-  const xToMidi = (x: number, low: number) => {
-    const sc = SCALES[scaleRef.current] ?? SCALES.pentatonic
-    const span = sc.length * 3
-    const idx = Math.min(span - 1, Math.max(0, Math.floor(x * span)))
-    return low + Math.floor(idx / sc.length) * 12 + sc[idx % sc.length]
-  }
+
+  const landStrike = useCallback(
+    (s: Strike, rapid: number) => {
+      if (!gateOpenRef.current) return
+      // pitch from height: high strikes ring high
+      const midi = scaleDegree(1 - s.y, scaleRef.current, s.kind === 'kick' ? 43 : 55, 2)
+      const vel = Math.round(40 + s.force * 87)
+      surface.current?.strike(s, glyphFor(s, rapid))
+      setHits((h) => h + 1)
+      if (inMax) {
+        outletMessage('strike', s.kind, midi, vel, Number(s.x.toFixed(3)), Number(s.y.toFixed(3)), rapid)
+        // the luogu cell, spelled out as notes so simple patches still speak
+        if (s.kind === 'punch') {
+          outletNote('gu', 96, vel, 30) // 板 clapper
+          outletNote('pipa', midi, vel, 400)
+          setTimeout(() => outletNote('luo', midi, vel, 2000), 100)
+          if (rapid >= 3) {
+            for (let i = 1; i <= Math.min(9, 3 + rapid); i++) {
+              setTimeout(() => outletNote('pipa', midi + (i % 2 ? 0 : 12), Math.round(vel * (0.8 - i * 0.05)), 200), 80 + i * 60)
+            }
+          }
+        } else {
+          outletNote('gu', 40, vel, 600)
+          outletNote('luo', midi - 12, vel, 4000)
+          outletNote('pipa', midi + 12, vel, 400)
+          let t = 240
+          for (const gap of [130, 100, 75, 55, 45]) {
+            setTimeout(() => outletNote('gu', 96, Math.round(vel * 0.6), 30), t)
+            t += gap
+          }
+          setTimeout(() => outletNote('luo', midi - 5, Math.round(vel * 0.7), 1500), t)
+        }
+      } else {
+        audioStrike(s.kind, midi, s.force, s.x, rapid)
+      }
+    },
+    [inMax],
+  )
+
+  const onBody = useCallback(
+    (b: BodyState) => {
+      const now = performance.now()
+      if (b.present && !bodySeen) setBodySeen(true)
+      // the gate: stand in frame and hold still
+      if (!gateOpenRef.current) {
+        if (b.present && b.stillness > 0.05) {
+          if (!gateStartRef.current) gateStartRef.current = now
+          const p = Math.min(1, b.stillness / 0.82)
+          setGateProgress(p)
+          surface.current?.setGate(p, false)
+          if (!inMax) {
+            void ensureAudio()
+            setAudioGate(p)
+          }
+          if (p >= 1) openGate()
+        } else {
+          gateStartRef.current = 0
+        }
+        return
+      }
+      if (b.phase !== phaseRef.current) {
+        phaseRef.current = b.phase
+        setPhase(b.phase)
+      }
+      for (const s of b.strikes) landStrike(s, b.rapid)
+
+      // continuous control stream, ~20 Hz
+      if (now - lastCtlSentRef.current > 50) {
+        lastCtlSentRef.current = now
+        const ctl = {
+          width: b.stance,
+          root: b.root,
+          guard: b.guard,
+          breath: b.stillness,
+          energy: b.energy,
+          lean: b.lean,
+        }
+        setMeters({ stance: b.stance, root: b.root, breath: b.stillness, energy: b.energy })
+        if (inMax) {
+          for (const [k, v] of Object.entries(ctl)) {
+            const q = Math.round(v * 100) / 100
+            if (Math.abs((lastCtlRef.current[k] ?? -1) - q) >= 0.02) {
+              lastCtlRef.current[k] = q
+              outletMessage('ctl', k, q)
+            }
+          }
+        } else setAudioBody(ctl)
+      }
+    },
+    [bodySeen, inMax, landStrike, openGate],
+  )
+
+  const onPointerStrike = useCallback(
+    (s: Strike) => {
+      void ensureAudio()
+      if (!gateOpenRef.current) return
+      const now = performance.now()
+      pointerPunchesRef.current = pointerPunchesRef.current.filter((t) => now - t < 1200)
+      if (s.kind === 'punch') pointerPunchesRef.current.push(now)
+      landStrike(s, pointerPunchesRef.current.length)
+      setPhase('发')
+      setTimeout(() => setPhase((p) => (p === '发' ? '收' : p)), 340)
+      setTimeout(() => setPhase((p) => (p === '收' ? '势' : p)), 1200)
+    },
+    [landStrike],
+  )
+
+  // ------------------------------------------------------ brushwork --
+  const lastMaxNote = useRef<Record<number, { t: number; midi: number }>>({})
 
   const onDrawPoint = useCallback(
-    (
-      pointerId: number,
-      _pen: string,
-      p: { x: number; y: number; pressure: number; speed: number; z?: number },
-    ) => {
-      // silent until the summoning ritual awakens the instrument — the
-      // piece clock must not start while the start screen is still up
-      if (!isAwakened()) return
-      const now = performance.now()
-      lastDrawRef.current = now
-      if (pieceStartRef.current === null) pieceStartRef.current = now
-      const st = pieceState(now - pieceStartRef.current)
-      if (st.fade <= 0) return // the piece has ended in silence
-      const pf = slotOf(pointerId)
-      const material = st.materials[Math.min(pf.slot, 1)]
-      // a hand changing material lets go of its sustained line first
-      if (pf.lastMat === 'line' && material !== 'line') glideStop(pointerId)
-      pf.lastMat = material
-
-      // the 3D reading of the gesture
-      const vol = Math.min(1, Math.max(0, 1 - p.y)) // Y: higher = louder
-      const z = p.z ?? 0.5 // Z: hand size = depth
-      const midi = xToMidi(p.x, pf.slot === 0 ? 31 : 53) // X: pitch
-      const cutoff = 250 + z * 4200 // near = bright
-      const wet = 0.2 + (1 - z) * 0.9 // far = sunk in reverb
-      const fade = st.fade
-
-      if (material === 'line') {
-        // line: one continuous voice per hand — the gesture IS the sound
-        if (!inMax) {
-          glideTo(
-            pointerId,
-            MAT_PEN.line,
-            midi,
-            (0.02 + vol * 0.12) * fade,
-            cutoff,
-            wet,
-          )
-        } else if (now - pf.lastHit > 300) {
-          pf.lastHit = now
-          emit({
-            timeMs: 0,
-            pen: MAT_PEN.line,
-            midi,
-            velocity: Math.round((12 + vol * 46) * fade),
-            durationMs: 700,
-          })
+    (pointerId: number, instr: string, p: DrawPoint) => {
+      if (!gateOpenRef.current) return
+      if (!inMax && !isAwakened()) return
+      const slot = slotOf(pointerId)
+      const midi = scaleDegree(p.x, scaleRef.current, LOW[slot], 2)
+      const level = Math.min(1, Math.max(0.05, (1 - p.y) * 0.8 + p.pressure * 0.3))
+      if (inMax) {
+        const last = lastMaxNote.current[slot]
+        const now = performance.now()
+        if (!last || last.midi !== midi || now - last.t > 900) {
+          lastMaxNote.current[slot] = { t: now, midi }
+          emit({ timeMs: 0, pen: instr, midi, velocity: Math.round(30 + level * 70), durationMs: 1200 }, p.x)
         }
-        surfaceHandle.current?.notePulse(pointerId, 0.25 + vol * 0.3)
-        return
-      }
-
-      if (material === 'point') {
-        // point: grains — short hits whose density grows with loudness
-        // and hand energy
-        const gap = 320 - vol * 180 - Math.min(0.5, p.speed) * 120
-        if (now - pf.lastHit < Math.max(70, gap)) return
-        pf.lastHit = now
-        emit({
-          timeMs: 0,
-          pen: MAT_PEN.point,
-          midi,
-          velocity: Math.round((18 + vol * 58) * fade),
-          durationMs: 140,
-        })
-        surfaceHandle.current?.notePulse(pointerId, 0.5 + vol * 0.5)
-        return
-      }
-
-      // plane: a bell tree — the chord rippled top-down as a cascade of
-      // tiny chimes, like a hand sweeping through hanging bells
-      if (now - pf.lastHit < 900) return
-      pf.lastHit = now
-      const chord = chordAt(scaleRef.current, chordIndex(now))
-      const root = snapToChord(midi, chord)
-      const tones: number[] = []
-      for (const [i, off] of [16, 12, 7, 4, 0, -5].entries()) {
-        tones[i] = snapToChord(root + off, chord)
-      }
-      const velocity = Math.round((14 + vol * 42) * fade)
-      if (!inMax) {
-        playBellTree(tones, velocity)
       } else {
-        tones.forEach((t, i) => {
-          setTimeout(
-            () =>
-              emit({
-                timeMs: 0,
-                pen: MAT_PEN.plane,
-                midi: t,
-                velocity,
-                durationMs: 500,
-              }),
-            i * 85,
-          )
-        })
+        brushTo(slot, instr === 'pipa' ? 'pipa' : 'qin', midi, level, p.x, p.speed)
       }
-      surfaceHandle.current?.notePulse(pointerId, 0.7 + vol * 0.3)
+      surface.current?.notePulse(pointerId, 0.3 + level * 0.4)
     },
     [emit, inMax],
   )
 
   const onDrawEnd = useCallback((pointerId: number) => {
-    glideStop(pointerId)
-    perfRef.current.delete(pointerId)
+    brushEnd(slotOf(pointerId))
   }, [])
 
-  // the piece clock: drive the section HUD, and R restarts the work
+  // the breath follows the slow drift of the tonal centre
   useEffect(() => {
+    let last = -1
     const id = setInterval(() => {
-      if (pieceStartRef.current === null) return
-      const st = pieceState(performance.now() - pieceStartRef.current)
-      setHud({ label: st.label, progress: st.progress })
-    }, 250)
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'r' || e.key === 'R') {
-        pieceStartRef.current = null
-        setHud(null)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => {
-      clearInterval(id)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [])
-
-  // hand tracking: on by default. Camera-tracked fingertips as input
-  // (touch/mouse stay as fallback). Dock ✋ toggle is with the bottom bar.
-  const surfaceHandle = useRef<DrawHandle | null>(null)
-  const [handsOn] = useState(true)
-
-  // useEffect(() => {
-  //   const onKey = (e: KeyboardEvent) => {
-  //     if (e.key === 'Tab') {
-  //       e.preventDefault()
-  //       setDockOpen((v) => !v)
-  //     }
-  //   }
-  //   window.addEventListener('keydown', onKey)
-  //   return () => window.removeEventListener('keydown', onKey)
-  // }, [])
-
-  // a whisper of a bed: a single low root, quiet, so the point/line/plane
-  // materials stay the foreground image
-  useEffect(() => {
-    let lastBar = -1
-    const id = setInterval(() => {
-      const now = performance.now()
-      const active = playing || now - lastDrawRef.current < 5000
-      if (!active) return
-      const bar = chordIndex(now)
-      if (bar === lastBar) return
-      lastBar = bar
-      const chord = chordAt(scaleRef.current, bar)
-      const dur = barMs() * 2 * 1.3
-      emit({
-        timeMs: 0,
-        pen: 'velvet',
-        midi: chord[0] - 12,
-        velocity: 14,
-        durationMs: dur,
-      })
-    }, 120)
+      const i = centreIndex(performance.now())
+      if (i === last) return
+      last = i
+      const chord = chordAt(scaleRef.current, i, 48)
+      breathPitch(chord[0] + 12)
+      if (inMax) outletMessage('centre', chord[0])
+    }, 200)
     return () => clearInterval(id)
-  }, [playing, emit])
+  }, [inMax])
 
+  useEffect(() => {
+    setScaleName(scale)
+  }, [scale])
+
+  // ----------------------------------------------------- transport --
   const stop = useCallback(() => {
     setPlaying(false)
     setPlayheadX(null)
@@ -265,14 +300,14 @@ export default function App() {
   }, [inMax])
 
   const play = useCallback(() => {
-    notesRef.current = strokesToNotes(strokesRef.current, loopMs, scale)
+    notesRef.current = strokesToNotes(strokesRef.current, loopMs, scaleRef.current)
     loopMsRef.current = loopMs
     firedRef.current = new Set()
     lastLoopRef.current = 0
     startRef.current = performance.now()
     setPlaying(true)
     if (inMax) outletMessage('transport', 'play')
-  }, [loopMs, scale, inMax])
+  }, [loopMs, inMax])
 
   useEffect(() => {
     if (!playing) return
@@ -283,17 +318,13 @@ export default function App() {
       if (loopIndex !== lastLoopRef.current) {
         lastLoopRef.current = loopIndex
         firedRef.current = new Set()
-        notesRef.current = strokesToNotes(
-          strokesRef.current,
-          loopMsRef.current,
-          scaleRef.current,
-        )
+        notesRef.current = strokesToNotes(strokesRef.current, loopMsRef.current, scaleRef.current)
       }
       setPlayheadX(t / loopMsRef.current)
       for (const n of notesRef.current) {
         if (!firedRef.current.has(n) && t >= n.timeMs) {
           firedRef.current.add(n)
-          emit(n)
+          emit(n, n.timeMs / loopMsRef.current)
         }
       }
       rafRef.current = requestAnimationFrame(tick)
@@ -303,88 +334,98 @@ export default function App() {
   }, [playing, emit])
 
   useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'p' || e.key === 'P') (playing ? stop : play)()
+      if (e.key === 'r' || e.key === 'R') {
+        setStrokes([])
+        setHits(0)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [play, playing, stop])
+
+  useEffect(() => {
     if (!inMax) return
     bindInlet('play', () => play())
     bindInlet('stop', () => stop())
     bindInlet('clear', () => setStrokes([]))
-    bindInlet('tempo', (bpm) => setTempo(Number(bpm) || 120))
+    bindInlet('tempo', (bpm) => setTempo(Number(bpm) || 96))
     bindInlet('scale', (name) => {
       if (SCALES[String(name)]) setScale(String(name))
     })
+    bindInlet('open', () => openGate())
     outletMessage('ready')
-  }, [inMax, play, stop])
+  }, [inMax, play, stop, openGate])
 
+  const ph = PHASES[phase]
   return (
-    <div className="app">
-      <main>
-        <DrawSurface
-          strokes={strokes}
-          onStrokesChange={setStrokes}
-          playheadX={playheadX}
-          penId={penId}
-          onDrawPoint={onDrawPoint}
-          onDrawEnd={onDrawEnd}
-          handleRef={surfaceHandle}
-        />
-        {handsOn && <HandLayer surface={surfaceHandle} />}
-        {hud && (
-          <div className="piece-hud" aria-hidden>
-            <span className="piece-hud-label">{hud.label}</span>
-            <span className="piece-hud-bar">
-              <span
-                className="piece-hud-fill"
-                style={{ width: `${Math.round(hud.progress * 100)}%` }}
-              />
-            </span>
+    <div className={`app ${gateOpen ? 'open' : 'closed'}`}>
+      <InkSurface
+        strokes={strokes}
+        onStrokesChange={setStrokes}
+        playheadX={playheadX}
+        penId="qin"
+        onDrawPoint={onDrawPoint}
+        onDrawEnd={onDrawEnd}
+        onPointerStrike={onPointerStrike}
+        handleRef={surface}
+      />
+      <BodyLayer surface={surface} onBody={onBody} open={gateOpen} />
+
+      <header className="masthead">
+        <h1>nocturne</h1>
+        <p className="sub">
+          <span className="cjk">拓</span> a rubbing of the body in ink
+        </p>
+      </header>
+
+      <aside className={`phase phase-${phase}`} aria-live="polite">
+        <span className="phase-glyph">{phase}</span>
+        <span className="phase-word">
+          {ph.pinyin} · {ph.word}
+        </span>
+      </aside>
+
+      <footer className="foot">
+        <div className="mode">
+          <span className="mode-glyph">{MODE_GLYPH[scale] ?? scale.slice(0, 1)}</span>
+          <span className="mode-name">
+            {scale} · {tempo}
+          </span>
+          <div className="meters" aria-hidden>
+            {(['stance', 'root', 'breath', 'energy'] as const).map((k) => (
+              <span key={k} className="meter" title={k}>
+                <i style={{ transform: `scaleX(${Math.max(0.02, meters[k]).toFixed(3)})` }} />
+              </span>
+            ))}
           </div>
-        )}
-      </main>
-      {/* bottom bar
-      {dockOpen && (
-      <nav className="dock">
-        {PENS.map((p) => (
-          <button
-            key={p.id}
-            className={`pen-dot-btn ${p.id === penId ? 'selected' : ''}`}
-            style={{ '--pen-color': p.color } as React.CSSProperties}
-            onClick={() => setPenId(p.id)}
-            aria-label={p.name}
-          />
-        ))}
-        <span className="dock-sep" />
-        <button
-          className={`hand-btn ${handsOn ? 'selected' : ''}`}
-          onClick={() => setHandsOn((v) => !v)}
-          aria-label="hand tracking"
-          title="hand tracking"
-        >
-          ✋
-        </button>
-        <span className="dock-sep" />
-        <input
-          className="tempo"
-          type="range"
-          min={40}
-          max={240}
-          value={tempo}
-          onChange={(e) => setTempo(Number(e.target.value))}
-          aria-label="tempo"
-        />
-        <select
-          className="scale"
-          value={scale}
-          onChange={(e) => setScale(e.target.value)}
-          aria-label="scale"
-        >
-          {Object.keys(SCALES).map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-      </nav>
+        </div>
+        <div className="hints">
+          <span>{hits} {hits === 1 ? 'strike' : 'strikes'}</span>
+          <span>D view</span>
+          <span>P {playing ? 'stop' : 'loop'}</span>
+          <span>R clear</span>
+        </div>
+      </footer>
+
+      {!gateOpen && (
+        <section className="gate" style={{ '--p': gateProgress } as React.CSSProperties}>
+          <div className="gate-ring" />
+          <div className="gate-line" />
+          <h2>
+            <span className="cjk">立</span>
+          </h2>
+          <p className="gate-instruction">
+            {bodySeen
+              ? 'stand. let the arms hang. hold still for a breath.'
+              : 'step back until the whole body is in frame — or hold the pointer.'}
+          </p>
+          <p className="gate-legend">
+            slow hands brush the qin · a fast fist lands 八答仓 · a kick tears the curtain
+          </p>
+        </section>
       )}
-      */}
     </div>
   )
 }

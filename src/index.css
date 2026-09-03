@@ -2,6 +2,19 @@
   box-sizing: border-box;
 }
 
+:root {
+  --ground: #0e0d0c;
+  --paper: #e6dfd0;
+  --ash: #8a8378;
+  --mist: #4a4642;
+  --cinnabar: #b5372a;
+  --serif:
+    'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', 'Songti SC',
+    'Noto Serif CJK SC', 'Noto Serif SC', Georgia, serif;
+  --cjk: 'Songti SC', 'STSong', 'Noto Serif CJK SC', 'Noto Serif SC', 'SimSun', serif;
+  --mono: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+}
+
 html,
 body,
 #root {
@@ -11,16 +24,10 @@ body,
 }
 
 body {
-  font-family:
-    'Inter',
-    system-ui,
-    -apple-system,
-    sans-serif;
-  color: #eaeaf2;
-  background:
-    radial-gradient(1100px 650px at 50% 30%, rgba(46, 42, 38, 0.5), transparent 70%),
-    radial-gradient(900px 550px at 15% 100%, rgba(38, 32, 30, 0.4), transparent 65%),
-    #060505;
+  font-family: var(--serif);
+  color: var(--paper);
+  background: var(--ground);
   overflow: hidden;
   user-select: none;
+  -webkit-font-smoothing: antialiased;
 }

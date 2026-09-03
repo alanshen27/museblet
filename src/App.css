@@ -1,166 +1,356 @@
 .app {
   width: 100vw;
   height: 100vh;
-  display: flex;
-  flex-direction: column;
   position: relative;
+  overflow: hidden;
 }
 
-main {
-  flex: 1;
-  position: relative;
-  min-height: 0;
+/* ------------------------------------------------------------ surface -- */
+.ink-surface {
+  position: absolute;
+  inset: 0;
 }
 
-.draw-surface {
+.ink-fluid,
+.ink-marks {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   display: block;
+}
+
+.ink-marks {
   touch-action: none;
   cursor: crosshair;
 }
 
-/* floating minimal dock */
-.dock {
-  position: absolute;
-  bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 10px 18px;
-  border-radius: 999px;
-  background: rgba(10, 9, 8, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(16px);
-  opacity: 0.35;
-  transition: opacity 0.4s ease;
-  z-index: 2;
+/* camera layer: hidden unless in the tracking view (D) */
+.body-video {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
-.dock:hover {
+.body-video.dev {
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+  transform: scaleX(-1);
+  opacity: 0.22;
+  filter: grayscale(1) contrast(1.2);
+  z-index: 5;
+}
+
+.body-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.body-status {
+  position: fixed;
+  top: 22px;
+  right: 26px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ash);
+  opacity: 0.8;
+  z-index: 8;
+}
+
+.body-status.unavailable {
+  color: var(--cinnabar);
+}
+
+/* ----------------------------------------------------------- masthead -- */
+.masthead {
+  position: fixed;
+  top: 26px;
+  left: 30px;
+  z-index: 8;
+  pointer-events: none;
+}
+
+.masthead h1 {
+  margin: 0;
+  font-weight: 400;
+  font-size: 15px;
+  letter-spacing: 0.34em;
+  text-transform: lowercase;
+  color: var(--paper);
+}
+
+.masthead .sub {
+  margin: 6px 0 0;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--ash);
+  font-style: italic;
+}
+
+.cjk {
+  font-family: var(--cjk);
+  font-style: normal;
+  letter-spacing: 0;
+}
+
+.masthead .sub .cjk {
+  color: var(--paper);
+  margin-right: 8px;
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------- phase -- */
+.phase {
+  position: fixed;
+  right: 34px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  z-index: 8;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 1.2s ease;
+}
+
+.app.open .phase {
   opacity: 1;
 }
 
-.pen-dot-btn {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  background: var(--pen-color);
-  opacity: 0.45;
-  transition: all 0.25s ease;
+.phase-glyph {
+  font-family: var(--cjk);
+  font-size: clamp(64px, 9vh, 110px);
+  line-height: 1;
+  color: var(--paper);
+  opacity: 0.55;
+  transition:
+    opacity 0.5s ease,
+    color 0.5s ease,
+    transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.pen-dot-btn:hover {
+.phase-word {
+  writing-mode: vertical-rl;
+  font-size: 10.5px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--ash);
+}
+
+.phase-发 .phase-glyph {
+  opacity: 1;
+  color: var(--cinnabar);
+  transform: scale(1.12);
+  transition-duration: 0.08s;
+}
+
+.phase-收 .phase-glyph {
   opacity: 0.8;
 }
 
-.pen-dot-btn.selected {
+.phase-息 .phase-glyph {
+  opacity: 0.3;
+  animation: breathe 5s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(0.97);
+    opacity: 0.22;
+  }
+  50% {
+    transform: scale(1.02);
+    opacity: 0.4;
+  }
+}
+
+/* -------------------------------------------------------------- foot -- */
+.foot {
+  position: fixed;
+  left: 30px;
+  right: 30px;
+  bottom: 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  z-index: 8;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 1.2s ease 0.4s;
+}
+
+.app.open .foot {
   opacity: 1;
-  transform: scale(1.35);
-  box-shadow: 0 0 12px var(--pen-color);
 }
 
-.hand-btn {
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  font-size: 13px;
+.mode {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+}
+
+.mode-glyph {
+  font-family: var(--cjk);
+  font-size: 30px;
   line-height: 1;
-  opacity: 0.35;
-  filter: grayscale(1);
-  transition: all 0.25s ease;
+  color: var(--paper);
+  opacity: 0.85;
 }
 
-.hand-btn:hover {
+.mode-name {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ash);
+  padding-bottom: 3px;
+}
+
+.meters {
+  display: flex;
+  gap: 6px;
+  padding-bottom: 5px;
+  margin-left: 6px;
+}
+
+.meter {
+  display: block;
+  width: 34px;
+  height: 1px;
+  background: rgba(230, 223, 208, 0.14);
+  overflow: hidden;
+}
+
+.meter i {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: var(--paper);
+  transform-origin: left;
+  transition: transform 0.25s linear;
+}
+
+.hints {
+  display: flex;
+  gap: 22px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ash);
+}
+
+.hints span:first-child {
+  color: var(--paper);
+}
+
+/* -------------------------------------------------------------- gate -- */
+.gate {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  z-index: 7;
+  pointer-events: none;
+  text-align: center;
+}
+
+.gate h2 {
+  margin: 0;
+  font-weight: 400;
+  font-size: clamp(90px, 18vh, 200px);
+  line-height: 1;
+  color: var(--paper);
+  opacity: calc(0.28 + var(--p) * 0.72);
+  transition: opacity 0.2s linear;
+  position: relative;
+  z-index: 1;
+}
+
+.gate-ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(46vh, 46vw);
+  height: min(46vh, 46vw);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px solid rgba(230, 223, 208, 0.16);
+  animation: gate-breathe 6s ease-in-out infinite;
+}
+
+.gate-ring::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from -90deg,
+    var(--paper) calc(var(--p) * 360deg),
+    transparent 0
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  opacity: 0.9;
+}
+
+@keyframes gate-breathe {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.02);
+  }
+}
+
+.gate-line {
+  position: absolute;
+  left: 50%;
+  top: 82%;
+  height: 1px;
+  width: calc(var(--p) * 60vw);
+  transform: translateX(-50%);
+  background: linear-gradient(90deg, transparent, var(--ash), transparent);
   opacity: 0.7;
 }
 
-.hand-btn.selected {
-  opacity: 1;
-  filter: none;
-  text-shadow: 0 0 10px rgba(232, 227, 216, 0.6);
+.gate-instruction {
+  margin: 0;
+  max-width: 34ch;
+  font-size: 14px;
+  line-height: 1.7;
+  letter-spacing: 0.06em;
+  color: var(--paper);
+  opacity: 0.85;
+  position: relative;
+  z-index: 1;
 }
 
-.dock-sep {
-  width: 1px;
-  height: 16px;
-  background: rgba(255, 255, 255, 0.12);
-}
-
-.glyph {
-  background: none;
-  border: none;
-  color: rgba(232, 227, 216, 0.55);
-  font-size: 0.8rem;
-  cursor: pointer;
-  padding: 2px 4px;
-  transition: color 0.25s ease;
-}
-
-.glyph:hover {
-  color: rgba(232, 227, 216, 0.95);
-}
-
-.glyph.active {
-  color: #e8e3d8;
-}
-
-.tempo {
-  width: 70px;
-  accent-color: rgba(232, 227, 216, 0.5);
-  opacity: 0.6;
-}
-
-.scale {
-  background: transparent;
-  border: none;
-  color: rgba(232, 227, 216, 0.45);
-  font-size: 0.7rem;
-  letter-spacing: 0.1em;
-  cursor: pointer;
-}
-
-.scale option {
-  background: #0a0908;
-  color: #e8e3d8;
-}
-
-/* the piece: section label + progress, faint in the corner of the room */
-.piece-hud {
-  position: fixed;
-  top: 18px;
-  right: 22px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  pointer-events: none;
-  z-index: 30;
-}
-
-.piece-hud-label {
-  color: rgba(232, 227, 216, 0.4);
-  font-size: 0.8rem;
-  letter-spacing: 0.25em;
-}
-
-.piece-hud-bar {
-  width: 90px;
-  height: 2px;
-  background: rgba(232, 227, 216, 0.12);
-  border-radius: 1px;
-  overflow: hidden;
-  display: block;
-}
-
-.piece-hud-fill {
-  display: block;
-  height: 100%;
-  background: rgba(232, 227, 216, 0.35);
-  transition: width 0.25s linear;
+.gate-legend {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ash);
+  position: absolute;
+  bottom: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
