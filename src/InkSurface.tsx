@@ -910,16 +910,17 @@ export default function InkSurface({
           hover.current = null
         }}
         onPointerUp={(e) => {
-          // a short fast flick with the pointer is a strike
+          // a short fast flick with the pointer is a strike: judged by
+          // velocity (screen widths per second), like the body's fists
           const st = pointerState.current.get(e.pointerId)
-          const dur = st ? performance.now() - st.born : Infinity
-          if (st && dur < 260 && st.path.length >= 2) {
+          const dur = st ? Math.max(16, performance.now() - st.born) : Infinity
+          if (st && dur < 520 && st.path.length >= 2) {
             const a = st.path[0]
             const z = st.path[st.path.length - 1]
             const d = Math.hypot(z.x - a.x, z.y - a.y)
-            if (d > 0.04) {
+            const speed = d / (dur / 1000)
+            if (d > 0.05 && speed > 0.55) {
               strokeCancel(e.pointerId)
-              const speed = d / (dur / 1000)
               onPointerStrikeRef.current?.({
                 kind: Math.abs(z.y - a.y) > Math.abs(z.x - a.x) * 1.8 ? 'kick' : 'punch',
                 side: z.x < 0.5 ? 'L' : 'R',
@@ -927,7 +928,7 @@ export default function InkSurface({
                 y: z.y,
                 dx: (z.x - a.x) / d,
                 dy: (z.y - a.y) / d,
-                force: Math.min(1, Math.max(0.2, speed / 4)),
+                force: Math.min(1, Math.max(0.25, speed / 3)),
                 t: performance.now(),
               })
               return
