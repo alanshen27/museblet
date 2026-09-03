@@ -31,6 +31,20 @@ npm run dev
 
 Uses a built-in Web Audio synth (per-pen timbres + reverb).
 
+## Sanda image test harness (dev)
+
+Validate punch/kick pose classification on still images without a webcam. The harness loads MediaPipe **Pose** (separate from the main app’s hand landmarker), runs geometric strike heuristics on curated Wikimedia fixtures, draws joint overlays, and fires the shared `onStrike({ type, confidence, joints })` callback (logged in the UI).
+
+```sh
+npm run test:sanda
+```
+
+Or with the main dev server: open [http://localhost:5173/test/sanda](http://localhost:5173/test/sanda).
+
+- Fixture images and license notes: `public/test/sanda/fixtures/README.md`
+- Strike logic: `src/strikes/` (reusable when live Sanda mode lands)
+- Still images use limb extension and joint angles only; live video will add velocity onset later.
+
 ## Run in Max/MSP
 
 1. Build the web app to static HTML:
