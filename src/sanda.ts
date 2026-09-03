@@ -214,10 +214,15 @@ export class SandaTracker {
    * @param world metric world landmarks (33), optional — gives depth
    */
   update(lm: PoseLM[] | null, t: number, world: PoseLM[] | null = null): BodyState {
-    const dt = this.lastT ? clamp((t - this.lastT) / 1000, 1 / 120, 0.1) : 1 / 30
+    const rawDt = this.lastT ? (t - this.lastT) / 1000 : 1 / 30
+    const dt = clamp(rawDt, 1 / 120, 0.1)
     this.lastT = t
     const strikes: Strike[] = []
     this.snapNow = false
+    // a gap longer than a fifth of a second (a stalled tab, a starved
+    // machine) tells us nothing about speed: take the positions, carry no
+    // velocity, fire nothing
+    const stalled = rawDt > 0.2
 
     if (!lm || lm.length < N_LM) {
       this.missing++
@@ -270,7 +275,7 @@ export class SandaTracker {
         const vis = p.visibility ?? 1
         const rz = world ? -world[i].z / wsw : 0
         const jump = Math.hypot(rx - j.x, ry - j.y)
-        if (jump > sw * 1.2 || j.vis < 0.2) {
+        if (stalled || jump > sw * 1.2 || j.vis < 0.2) {
           // no limb covers more than a shoulder-width in one frame: this
           // is tracking snapping to a new guess, not motion — follow it,
           // but carry no velocity out of it
@@ -466,8 +471,10 @@ export class SandaTracker {
       })
       this.punchTimes.push(t)
     }
-    punch('L', LM.L_WRIST, LM.L_SHOULDER, 0, 'pL')
-    punch('R', LM.R_WRIST, LM.R_SHOULDER, 1, 'pR')
+    if (!stalled) {
+      punch('L', LM.L_WRIST, LM.L_SHOULDER, 0, 'pL')
+      punch('R', LM.R_WRIST, LM.R_SHOULDER, 1, 'pR')
+    }
 
     const kick = (side: Side, ai: number, ki: number, hi: number, fi: number, key: string) => {
       if (t - (this.lastStrike[key] ?? -Infinity) < KICK_REFRACTORY) return
@@ -510,8 +517,10 @@ export class SandaTracker {
         confidence,
       })
     }
-    kick('L', LM.L_ANKLE, LM.L_KNEE, LM.L_HIP, LM.L_FOOT, 'kL')
-    kick('R', LM.R_ANKLE, LM.R_KNEE, LM.R_HIP, LM.R_FOOT, 'kR')
+    if (!stalled) {
+      kick('L', LM.L_ANKLE, LM.L_KNEE, LM.L_HIP, LM.L_FOOT, 'kL')
+      kick('R', LM.R_ANKLE, LM.R_KNEE, LM.R_HIP, LM.R_FOOT, 'kR')
+    }
 
     if (strikes.length) {
       this.lastAnyStrike = t
