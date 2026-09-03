@@ -98,17 +98,28 @@ unavailable. Pointer strikes still work on top of it.
 | gesture | sound | image |
 | --- | --- | --- |
 | punch | 八答仓: 板 clapper → gu tap → small luo, then space; a pipa attack at the strike's height | ink burst along the fist, hairline cracks, ring pulse, seal 打 / 发, screen weight shifts |
-| rapid punches | 轮指 tremolo on the pipa, denser with each hit | stacked afterimages, seal 连 |
+| rapid punches | 轮指: a wheel of outward plucks whose density is a rate fed by the punching and winding down on its own — not a roll on a grid | stacked afterimages, seal 连 |
 | kick | gu + 大锣 together, a 冲头 clapper roll accelerating into a second gong; the pipa jumps register | a vertical curtain torn through the ink, splatter, tall seal 起势 |
-| slow left hand above the hips | qin string held and slid (走手音), low register | a wet brush mark that dries, 飞白 where the hand moved faster |
-| slow right hand above the hips | pipa, high register | the same, brighter and drier |
+| slow, wet hand above the hips | qin: an onset each time the integral of speed crosses a threshold, slides between (走手音, friction on the glide); left hand low register, right hand high | a wet brush mark that dries |
+| fast, dry hand | pipa attacks as it goes | 飞白 hairlines where the hand moved fast |
+| hand too slow | silence — the string rings on | the mark stands |
+| closed path | 泛音: the harmonics of the pitches it passed through | — |
+| turning torso (throw, spin) | erhu: one continuous 滑音 around the centre, the bow's weight arriving over ~500 ms | — |
+| 亮相 — fast motion that stops dead | 撕边一锣: a rim roll rushing into one gong, then nothing | one clean ring, seal 定 |
+| seize — hands drawn together at the torso | strings muted at the node, pitch held | — |
+| breath (shoulders) | 气口: the dizi phrase opens on the out-breath, closes on the in-breath; air pressure sets how much of the tone is noise | — |
 | stillness | dizi breath at the tonal centre | the ghost stands alone; marks fade to 留白 |
 
 **Pointer:** hold it for a moment to open the gate. Dragging slowly
 brushes; a quick flick is a punch (vertical flick: kick). `Enter` also
-opens the gate. `D` shows the tracking view, `P` loops the marks on the
-surface as a sequence (x = time, y = pitch), `R` clears. Sound starts on
-the first click or key (browser autoplay rules).
+opens the gate. `D` shows the tracking view, `T` turns the sheet over
+(ink-stone ↔ xuan paper; `?theme=xuan`), `P` loops the marks on the
+surface 散板 — unquantised, x = time, y = pitch, length = duration — `R`
+clears. Sound starts on the first click or key (browser autoplay rules).
+
+**Anti-defaults, by design:** no drop, no sidechain, no kick/snare groove,
+no pentatonic arpeggiator; the luogu punctuates action (冲头 / 撕边一锣 /
+八答仓) and the loop is free meter.
 
 ## Sound
 
@@ -117,14 +128,25 @@ the first click or key (browser autoplay rules).
 The Web Audio engine mirrors professional Max practice:
 
 - **Plucked strings** — a Karplus-Strong / waveguide string in an
-  AudioWorklet (`worklets/string.js`): shaped noise excitation with a
-  pluck-position comb, fractional delay, one-pole loop loss, per-period
-  gain set from a target T60. `freq` is an AudioParam, so slides retune the
-  ringing string instead of re-plucking. Qin (silk, long, dark) and pipa
-  (bright, short) are the same model with different parameters; a body
-  resonance pair sits after each string.
-- **Dizi** — bandpassed noise + sine core + a 笛膜 membrane buzz a hair
-  off the octave, vibrato depth from body energy. Swells with stillness.
+  AudioWorklet (`worklets/string.js`; native `DelayNode` feedback is
+  128-sample coarse): shaped noise excitation with a pluck-position comb,
+  fractional delay, one-pole loop loss, per-period gain set from a target
+  T60. `freq` is an AudioParam, so slides retune the ringing string; a
+  slide also rubs the finger along the string — **friction** noise
+  proportional to glide speed enters the loop and costs energy, so a glide
+  decays into friction and then silence (吟猱). **泛音** plucks comb the
+  excitation at the touched node (x[n] + x[n − P/node]). Qin (散音/按音/泛音;
+  silk, long, dark) and pipa (bright, short) are the same model with
+  different parameters; a body resonance pair sits after each string.
+- **Pipa 轮指** — a wheel (`feedWheel`): a scheduler plucks at a rate fed
+  by punch rapidity or brush speed, each finger a little different, and
+  winds down by itself when the feeding stops.
+- **Dizi** — the breath *is* the tone: air through a narrow resonator at
+  the pitch, a sine core only as a fundamental, a 笛膜 membrane buzz a hair
+  off the octave. Air pressure sets the noise/core mix and the resonator's
+  Q; the phrase is gated by the body's own breath (气口).
+- **Erhu** — a bowed string (sawtooth → bow lowpass → two body formants),
+  one continuous portamento, gain and brightness arriving over ~500 ms.
 - **Luogu** — the gong is a noise burst into a bank of high-Q resonators
   whose centre frequencies glide after the strike (大锣 sags, 小锣 rises),
   with a hiss riding the early decay. The drum is a skin sweep + body
@@ -161,6 +183,8 @@ abstractions and runs an FX rack fed from the bus:
   +4.5% → −3.5% over 1.3 s via `line~`; `svf~` hiss.
 - `nocturne.gu` — drum below midi 84 (skin sweep `cycle~` + body), 板
   clapper at 84+ (`reson~` click).
+- `nocturne.erhu` — `saw~` → `onepole~` bow → two `reson~` body formants,
+  `line~` 250 ms glide on the pitch, bow weight over 500 ms.
 - FX: `tapin~ 2000 / tapout~ 410. 630.` ping-pong echo with `onepole~`
   damping; Schroeder hall (`comb~` ×4 → `allpass~` ×2 → `onepole~`);
   `pfft~ nocturne.smear` spectral smear (`vectral~` slide on bin
@@ -177,12 +201,12 @@ Strikes kick the spectral smear's release time.
 
 Out of jweb (to Max):
 
-- `note <instr> <midi> <velocity> <durationMs>` — instr ∈ `qin pipa dizi luo gu`
+- `note <instr> <midi> <velocity> <durationMs>` — instr ∈ `qin pipa dizi erhu luo gu`
   (gu at midi ≥ 84 is the 板 clapper)
-- `strike <punch|kick> <midi> <velocity> <x> <y> <rapid>` — a landed strike
-  (the luogu cell is also spelled out as `note` events)
+- `strike <punch|kick|snap> <midi> <velocity> <x> <y> <rapid>` — a landed
+  strike or a 亮相 (the luogu cell is also spelled out as `note` events)
 - `section <起|承|转|合> <index> <resting>` — the form turns
-- `ctl <width|root|guard|breath|energy|lean> <0..1>` — the body stream, ~20 Hz
+- `ctl <width|root|guard|breath|energy|lean|breathSignal|seize> <value>` — the body stream, ~20 Hz
 - `centre <midi>` — the tonal centre drifting (宫 → 羽 → 商 → 徵)
 - `gate open` — the stance gate opened
 - `transport play|stop`, `ready`
@@ -197,6 +221,17 @@ Into jweb (from Max): `play`, `stop`, `clear`, `open`, `tempo <bpm>`,
 宫 gong `0 2 4 7 9`, 商 shang, 角 jue, 徵 zhi, 羽 yu (default; the guqin's
 shadowed home). 七声 — 清乐 qingyue, 雅乐 yayue (变徵), 燕乐 yanyue (闰).
 Harmony stacks 4ths and 5ths, no 3rds; the centre drifts slowly.
+
+## Two grounds
+
+The ink-stone (default): pale marks on a near-black warm ground, a stone
+rubbing. Xuan paper (`T`, `?theme=xuan`): near-black ink on warm off-white,
+one muted vermillion 印. The same fluid carries ink *amount*; the stone
+shows it as light, the paper as ink. Interface type is a crisp grotesque;
+calligraphy and the serif appear only at brand moments — the mark, the
+gate 立, the section turn. The landscape is nearly absent before the gate
+and in 起 and arrives with the piece's density; the empty canvas is the
+product.
 
 ## Image
 
