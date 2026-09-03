@@ -141,9 +141,11 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
     const brush = (b: BodyState) => {
       const hipY = ((b.joints.lHip?.y ?? 1) + (b.joints.rHip?.y ?? 1)) / 2
       const now = performance.now()
+      // both hands brush; the app chooses qin or pipa from how the hand
+      // moves (slow and wet, or fast and dry), in each hand's register
       for (const [id, name, instr] of [
         [LEFT_HAND, 'lWrist', 'qin'],
-        [RIGHT_HAND, 'rWrist', 'pipa'],
+        [RIGHT_HAND, 'rWrist', 'qin'],
       ] as const) {
         const j = b.joints[name]
         const h = hands[id]

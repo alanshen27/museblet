@@ -85,17 +85,20 @@
 
 .masthead h1 {
   margin: 0;
-  font-weight: 400;
-  font-size: 15px;
-  letter-spacing: 0.34em;
-  text-transform: lowercase;
+  font-family: var(--ui);
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
   color: var(--paper);
+  opacity: 0.85;
 }
 
 .masthead .sub {
   margin: 6px 0 0;
+  font-family: var(--serif);
   font-size: 11px;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
   color: var(--ash);
   font-style: italic;
 }
@@ -195,8 +198,26 @@
   transition: opacity 1.2s ease 0.4s;
 }
 
-.app.open .foot {
+.app.open.marked .foot {
   opacity: 1;
+}
+
+/* until the first mark only the mode seal shows, faintly */
+.app.open .foot .mode {
+  opacity: 1;
+}
+.app.open:not(.marked) .foot {
+  opacity: 1;
+}
+.app.open:not(.marked) .foot .hints,
+.app.open:not(.marked) .foot .meters,
+.app.open:not(.marked) .foot .mode-name {
+  opacity: 0;
+}
+.foot .hints,
+.foot .meters,
+.foot .mode-name {
+  transition: opacity 1.2s ease;
 }
 
 .mode {
@@ -206,11 +227,12 @@
 }
 
 .mode-glyph {
+  /* the mode mark, 徽-like: small, still */
   font-family: var(--cjk);
-  font-size: 30px;
+  font-size: 22px;
   line-height: 1;
   color: var(--paper);
-  opacity: 0.85;
+  opacity: 0.6;
 }
 
 .mode-name {
@@ -276,6 +298,7 @@
 
 .gate h2 {
   margin: 0;
+  font-family: var(--cjk);
   font-weight: 400;
   font-size: clamp(90px, 18vh, 200px);
   line-height: 1;
@@ -336,12 +359,13 @@
 
 .gate-instruction {
   margin: 0;
-  max-width: 34ch;
-  font-size: 14px;
+  max-width: 36ch;
+  font-family: var(--ui);
+  font-size: 12.5px;
   line-height: 1.7;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   color: var(--paper);
-  opacity: 0.85;
+  opacity: 0.8;
   position: relative;
   z-index: 1;
 }
@@ -483,4 +507,16 @@
 
 .body-status.tracking {
   opacity: 0.45;
+}
+
+/* xuan paper: the sheet is light, the ink is dark; keep chrome quiet */
+.app.theme-xuan .gate-ring {
+  border-color: rgba(26, 26, 26, 0.18);
+}
+.app.theme-xuan .meter,
+.app.theme-xuan .form-bar {
+  background: rgba(26, 26, 26, 0.12);
+}
+.app.theme-xuan .body-video.dev {
+  filter: grayscale(1) contrast(1.2) invert(1);
 }

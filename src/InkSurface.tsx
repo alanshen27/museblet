@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { Stroke } from './music'
-import { getInstrument, INK } from './instruments'
+import { getInstrument, getTheme, INK, type Instrument } from './instruments'
 import { Scene, type Mood } from './Scene'
 import { Character } from './Character'
 import { FIGURE, type BodyState, type Joint, type Strike } from './sanda'
@@ -38,6 +38,8 @@ export interface DrawHandle {
   setGate: (progress: number, open: boolean) => void
   /** the piece's mood for the landscape: density, breath, lean, section */
   setMood: (m: Partial<Mood>) => void
+  /** ink-stone or xuan paper */
+  setTheme: (paper: boolean) => void
 }
 
 interface Props {
@@ -112,6 +114,10 @@ const FADE_MS = 6000
 const MAX_STROKES = 36
 const WET_MS = 1800
 
+// the fluid carries ink *amount*; these are its two pigments, independent
+// of which theme displays them
+const FLUID_INK: [number, number, number] = [0.9, 0.87, 0.8]
+const FLUID_RED: [number, number, number] = [0.71, 0.22, 0.16]
 const hex = (c: string): [number, number, number] => [
   parseInt(c.slice(1, 3), 16) / 255,
   parseInt(c.slice(3, 5), 16) / 255,
@@ -121,6 +127,16 @@ const rgba = (c: string, a: number) => {
   const [r, g, b] = hex(c)
   return `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)},${a})`
 }
+// an instrument's ink in the current theme: on xuan paper every brush is
+// ink, mist is grey, the seal is vermillion
+const inkOf = (instr: Instrument) =>
+  getTheme() === 'xuan'
+    ? instr.brush === 'mist'
+      ? INK.ash
+      : instr.brush === 'seal'
+        ? INK.cinnabar
+        : INK.paper
+    : instr.ink
 const hash = (n: number) => {
   const s = Math.sin(n * 127.1 + 311.7) * 43758.5453
   return s - Math.floor(s)
@@ -236,16 +252,23 @@ export default function InkSurface({
   // ---------------------------------------------------------- strikes --
   const landStrike = useCallback((s: Strike, glyph: string) => {
     const now = performance.now()
+    if (s.kind === 'snap') {
+      // 亮相: the body stops dead — one clean ring and a small seal, no burst
+      rings.current.push({ x: s.x, y: s.y, born: now, life: 900, r0: 0.02, r1: 0.16 + s.force * 0.12, width: 1.4, color: INK.paper })
+      rings.current.push({ x: s.x, y: s.y, born: now + 120, life: 700, r0: 0.01, r1: 0.08, width: 0.8, color: INK.cinnabar })
+      seals.current.push({ x: s.x, y: s.y, size: 0.035 + s.force * 0.02, born: now, glyph, kind: 'punch', rot: (Math.random() - 0.5) * 0.12, seed: Math.random() * 1000 })
+      return
+    }
     const instr = getInstrument(s.kind === 'punch' ? 'luo' : 'gu')
-    const inkColor = hex(INK.paper)
-    const red = hex(INK.cinnabar)
+    const inkColor = FLUID_INK
+    const red = FLUID_RED
     // the fluid takes the shock: punches throw pale ink along the fist,
     // kicks tear a cinnabar-and-ink curtain
     const col: [number, number, number] =
       s.kind === 'punch'
         ? [inkColor[0] * 0.9 + red[0] * 0.1, inkColor[1] * 0.9 + red[1] * 0.1, inkColor[2] * 0.9 + red[2] * 0.1]
         : [red[0] * 0.75 + inkColor[0] * 0.25, red[1] * 0.75 + inkColor[1] * 0.25, red[2] * 0.75 + inkColor[2] * 0.25]
-    fluid.current?.shock({ x: s.x, y: s.y, dx: s.dx, dy: s.dy, force: s.force, kind: s.kind, color: col })
+    fluid.current?.shock({ x: s.x, y: s.y, dx: s.dx, dy: s.dy, force: s.force, kind: s.kind === 'kick' ? 'kick' : 'punch', color: col })
     seals.current.push({
       x: s.x,
       y: s.y,
@@ -276,7 +299,7 @@ export default function InkSurface({
         r0: 0.02,
         r1: 0.2 + s.force * 0.25,
         width: 0.7,
-        color: instr.ink,
+        color: inkOf(instr),
       })
     }
     cracks.current.push({ x: s.x, y: s.y, dx: s.dx, dy: s.dy, born: now, force: s.force, color: INK.paper })
@@ -327,7 +350,7 @@ export default function InkSurface({
           if (d < 0.0015) return
           // slow motion trails a faint wash; fast motion only pushes water
           const ink = Math.max(0, 1 - j.speed / 2.2) * amount
-          const c = hex(INK.paper)
+          const c = FLUID_INK
           F.splat(j.x, j.y, (dx / dt) * 0.35, (dy / dt) * 0.35, [c[0] * ink, c[1] * ink, c[2] * ink], radius, 1)
         }
         // the obstacle pass moves the mist; the hands add a little ink
@@ -348,7 +371,7 @@ export default function InkSurface({
         const p = s.points[s.points.length - 1]
         const q = s.points[s.points.length - 2]
         if (p && q) {
-          const c = hex(getInstrument(s.pen).ink)
+          const c = FLUID_INK
           F.splat(p.x, p.y, (p.x - q.x) / dt * 0.2, (p.y - q.y) / dt * 0.2, [c[0] * 0.08, c[1] * 0.08, c[2] * 0.08], 0.012)
         }
       }
@@ -526,11 +549,12 @@ export default function InkSurface({
       }
       const nearBeam = px !== null ? Math.max(0, 1 - Math.abs((pts[n >> 1]?.x ?? 0) - px) * 12) : 0
       // wet ink bleeds into the paper; as it dries the halo tightens
+      const inkC = inkOf(instr)
       if (wet > 0.02) {
-        g.shadowColor = rgba(instr.ink, 0.5 * wet)
+        g.shadowColor = rgba(inkC, 0.5 * wet)
         g.shadowBlur = (6 + 18 * wet) * dpr
       } else g.shadowBlur = 0
-      g.fillStyle = instr.ink
+      g.fillStyle = inkC
       g.globalAlpha = alpha * (instr.brush === 'mist' ? 0.35 : 0.82) + nearBeam * 0.2
       trace()
       g.fill()
@@ -854,6 +878,10 @@ export default function InkSurface({
         fluid.current?.setMood({ gate: open ? 1 : 0 })
       },
       setMood: (m) => fluid.current?.setMood(m),
+      setTheme: (paper) => {
+        fluid.current?.setTheme(paper)
+        character.current?.setTheme(paper)
+      },
     }
     return () => {
       handleRef.current = null

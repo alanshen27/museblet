@@ -235,7 +235,7 @@ void main() {
 uniform sampler2D uDye, uBody;
 uniform vec3 ground;
 uniform vec2 shake;
-uniform float time, flash, aspect, density, breath, lean, gate, section;
+uniform float time, flash, aspect, density, breath, lean, gate, section, paper;
 uniform int uBodyOn;
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -268,9 +268,12 @@ const float HOR = 0.19; // the waterline (y up) — the 2D layer's ground at 0.8
 // the landscape, the mist and the ink cloud at a screen position
 vec3 room(vec2 uv, vec2 fogUv, float near, float grain) {
   float t = time;
-  // paper: a warm dark ground with a pale breath of sky above the far peaks
-  vec3 col = ground + grain;
-  col += vec3(0.04, 0.037, 0.033) * exp(-abs(uv.y - 0.66) * 4.5);
+  // the ground: a warm dark stone, or xuan paper; a breath of sky above the peaks
+  vec3 col = ground + grain * (1.0 - paper * 0.5);
+  col += vec3(0.04, 0.037, 0.033) * exp(-abs(uv.y - 0.66) * 4.5) * (1.0 - paper * 1.6);
+  // the landscape is not wallpaper: it is nearly absent before the gate
+  // and in the opening, and arrives with the piece's density
+  float reveal = gate * (0.22 + 0.78 * min(1.0, density * 1.7));
   float mistBand = 0.0;
   // five layers, far to near: far peaks stand high and pale, dissolving
   // at their feet; near banks sit low and dark. Parallax with the lean.
@@ -288,12 +291,14 @@ vec3 room(vec2 uv, vec2 fogUv, float near, float grain) {
     float inside = smoothstep(y + 0.003, y - 0.003, uv.y);
     float foot = smoothstep(y - 0.22 - depth * 0.12, y - 0.015, uv.y);
     float ink = inside * (0.3 + 0.7 * foot) * (0.55 + 0.45 * wash);
-    vec3 tone = mix(vec3(0.24, 0.235, 0.22), vec3(0.04, 0.038, 0.036), pow(1.0 - depth, 0.8));
-    float veil = mix(0.45, 1.0, 1.0 - depth);
+    vec3 toneInk = mix(vec3(0.24, 0.235, 0.22), vec3(0.04, 0.038, 0.036), pow(1.0 - depth, 0.8));
+    vec3 tonePaper = mix(vec3(0.62, 0.6, 0.56), vec3(0.16, 0.155, 0.15), pow(1.0 - depth, 0.8));
+    vec3 tone = mix(toneInk, tonePaper, paper);
+    float veil = mix(0.45, 1.0, 1.0 - depth) * reveal;
     col = mix(col, tone, clamp(ink * veil, 0.0, 1.0));
     // the ridge line itself, a darker stroke; a pale rim of air above it
-    col = mix(col, tone * 0.7, smoothstep(0.02, 0.0, y - uv.y) * inside * 0.5);
-    col += vec3(0.035) * smoothstep(0.01, 0.0, abs(uv.y - y)) * depth;
+    col = mix(col, tone * 0.7, smoothstep(0.02, 0.0, y - uv.y) * inside * 0.5 * reveal);
+    col += vec3(0.035) * smoothstep(0.01, 0.0, abs(uv.y - y)) * depth * reveal * (1.0 - paper);
     // the negative space at the foot of each layer is mist
     mistBand += inside * (1.0 - foot) * (0.25 + depth * 0.45);
   }
@@ -314,17 +319,18 @@ vec3 room(vec2 uv, vec2 fogUv, float near, float grain) {
       float y = base + (h - 0.35) * (0.1 + depth * 0.26);
       float inside = smoothstep(y + 0.008, y - 0.008, ry);
       float foot = smoothstep(y - 0.22 - depth * 0.12, y - 0.015, ry);
-      vec3 tone = mix(vec3(0.24, 0.235, 0.22), vec3(0.04, 0.038, 0.036), pow(1.0 - depth, 0.8));
-      ref = mix(ref, tone, inside * (0.3 + 0.7 * foot) * mix(0.45, 1.0, 1.0 - depth) * 0.6);
+      vec3 tone = mix(mix(vec3(0.24, 0.235, 0.22), vec3(0.04, 0.038, 0.036), pow(1.0 - depth, 0.8)),
+                      mix(vec3(0.62, 0.6, 0.56), vec3(0.16, 0.155, 0.15), pow(1.0 - depth, 0.8)), paper);
+      ref = mix(ref, tone, inside * (0.3 + 0.7 * foot) * mix(0.45, 1.0, 1.0 - depth) * 0.6 * reveal);
     }
     float fade = smoothstep(0.0, 0.19, dw);
-    col = mix(ref * 0.8, ground * 0.85 + grain, fade * 0.8);
+    col = mix(mix(ref * 0.8, ref, paper), mix(ground * 0.85, ground * 0.97, paper) + grain, fade * 0.8);
     // the surface catches the sky in long broken strokes
     col += vec3(0.03, 0.029, 0.026) * smoothstep(0.55, 1.0, noise(vec2(uv.x * 30.0 + t * 0.2, uv.y * 260.0))) * (1.0 - fade) * 0.8;
     mistBand *= 0.2;
   }
   // the waterline: a hairline of light, drawn in as the gate opens
-  col += vec3(0.07, 0.066, 0.06) * smoothstep(0.002, 0.0, abs(uv.y - HOR)) * gate;
+  col += mix(vec3(0.07, 0.066, 0.06), vec3(-0.25), paper) * smoothstep(0.002, 0.0, abs(uv.y - HOR)) * gate;
 
   // mist: a slow procedural fog, thick at the mountains' feet and along
   // the water; the body parts it; the climax thins it
@@ -333,15 +339,23 @@ vec3 room(vec2 uv, vec2 fogUv, float near, float grain) {
   float band = exp(-abs(uv.y - HOR - 0.05) * 8.0) + 0.5 * exp(-abs(uv.y - HOR - 0.24) * 7.0);
   float fogAmt = (mistBand * 0.7 + fog * band * (0.8 + breath * 0.15)) * (0.95 - density * 0.4);
   fogAmt *= 1.0 - near * 0.85;
-  col = mix(col, vec3(0.36, 0.35, 0.33), clamp(fogAmt, 0.0, 1.0) * 0.34);
+  fogAmt *= 0.5 + 0.5 * reveal;
+  col = mix(col, mix(vec3(0.36, 0.35, 0.33), vec3(0.9, 0.88, 0.84), paper), clamp(fogAmt, 0.0, 1.0) * 0.34);
 
-  // the ink cloud (fluid dye)
+  // the ink cloud (fluid dye): light on the stone, ink on the paper
   vec3 d = texture(uDye, uv).rgb;
   vec3 dye = (1.0 - exp(-d * 1.35)) * 0.8;
   float dens = dot(d, vec3(0.333));
   float rim = smoothstep(0.02, 0.12, dens) * (1.0 - smoothstep(0.12, 0.5, dens));
   dye *= 1.0 + rim * 0.18;
-  return col + dye;
+  // on paper the same cloud is ink: its amount darkens the sheet toward
+  // black, or toward vermillion where the dye was tinted cinnabar
+  float amount = max(dye.r, max(dye.g, dye.b));
+  vec3 tint = dye / max(amount, 1e-4);
+  float redness = clamp((tint.r - tint.g) * 2.0, 0.0, 1.0);
+  vec3 inkCol = mix(vec3(0.1, 0.1, 0.1), vec3(0.7, 0.23, 0.17), redness);
+  vec3 onPaper = mix(col, inkCol, min(1.0, amount * 1.1));
+  return mix(col + dye, onPaper, paper);
 }
 
 void main() {
@@ -364,9 +378,9 @@ void main() {
   // a soft contact shadow where the character stands in the mist
   col *= 1.0 - 0.18 * exp(-max(dBody, 0.0) * 90.0) * float(uBodyOn);
 
-  float vig = 1.0 - smoothstep(0.3, 0.95, length(q * vec2(1.0, 1.25))) * 0.6;
+  float vig = 1.0 - smoothstep(0.3, 0.95, length(q * vec2(1.0, 1.25))) * mix(0.6, 0.12, paper);
   col *= vig;
-  col += flash * vec3(0.92, 0.88, 0.8);
+  col += flash * mix(vec3(0.92, 0.88, 0.8), vec3(-0.5, -0.5, -0.5), paper);
   fragColor = vec4(col, 1.0);
 }`,
 }
@@ -480,6 +494,7 @@ export class Scene {
   private head = [0.5, 0.5, 0.05]
   private headV = [0, 0]
   private mood: Mood = { density: 0.15, breath: 0, lean: 0, gate: 0, section: 0 }
+  private paper = 0
   private moodS = { density: 0.15, breath: 0, lean: 0, gate: 0 }
 
   constructor(canvas: HTMLCanvasElement) {
@@ -644,6 +659,12 @@ export class Scene {
 
   setMood(m: Partial<Mood>) {
     Object.assign(this.mood, m)
+  }
+
+  /** the ink-stone (dark) or xuan paper (light) */
+  setTheme(paper: boolean) {
+    this.paper = paper ? 1 : 0
+    this.ground = paper ? [0.92, 0.9, 0.85] : [0.055, 0.051, 0.047]
   }
 
   private renderBodyField() {
@@ -849,6 +870,7 @@ export class Scene {
     gl.uniform1f(p.u('lean'), this.moodS.lean)
     gl.uniform1f(p.u('gate'), this.moodS.gate)
     gl.uniform1f(p.u('section'), this.mood.section)
+    gl.uniform1f(p.u('paper'), this.paper)
     gl.uniform1i(p.u('uBodyOn'), this.bodyOn ? 1 : 0)
     this.blit(null)
   }

@@ -12,7 +12,10 @@
     'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', 'Songti SC',
     'Noto Serif CJK SC', 'Noto Serif SC', Georgia, serif;
   --cjk: 'Songti SC', 'STSong', 'Noto Serif CJK SC', 'Noto Serif SC', 'SimSun', serif;
-  --mono: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  /* a crisp grotesque for everything that is interface; calligraphy and
+     the serif only at brand moments (the mark, the gate, the section turn) */
+  --ui: 'Inter', 'Helvetica Neue', Helvetica, Arial, system-ui, sans-serif;
+  --mono: var(--ui);
 }
 
 html,
@@ -24,7 +27,7 @@ body,
 }
 
 body {
-  font-family: var(--serif);
+  font-family: var(--ui);
   color: var(--paper);
   background: var(--ground);
   overflow: hidden;

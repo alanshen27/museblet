@@ -79,7 +79,7 @@ float fbm(vec2 p) {
 
 // the body: black, with a chi rim and inner filaments
 const BODY_FRAG = `
-uniform float time, energy, strike;
+uniform float time, energy, strike, paper;
 uniform vec3 rimA, rimB;
 varying vec3 vN;
 varying vec3 vV;
@@ -96,13 +96,14 @@ void main() {
   float vein = smoothstep(0.52, 0.58, f) * (1.0 - smoothstep(0.58, 0.64, f));
   vec3 rim = mix(rimA, rimB, strike);
   col += rim * vein * (0.015 + energy * 0.08 + strike * 0.1) * pow(1.0 - ndv, 2.0);
-  col += rim * fres * (0.55 + energy * 0.6 + strike * 1.3);
+  col += rim * fres * (0.55 + energy * 0.6 + strike * 1.3) * (1.0 - paper * 0.55);
+  col = mix(col, vec3(0.1, 0.1, 0.1), paper * 0.9 * (1.0 - fres));
   gl_FragColor = vec4(col, 1.0);
 }`
 
 // the aura: an additive hull around the body, fading outward
 const AURA_FRAG = `
-uniform float energy, strike;
+uniform float energy, strike, paper;
 uniform vec3 rimA, rimB;
 varying vec3 vN;
 varying vec3 vV;
@@ -111,7 +112,7 @@ void main() {
   vec3 v = normalize(vV);
   float edge = pow(1.0 - abs(dot(n, v)), 3.5);
   vec3 rim = mix(rimA, rimB, strike);
-  float a = edge * (0.09 + energy * 0.18 + strike * 0.35);
+  float a = edge * (0.09 + energy * 0.18 + strike * 0.35) * (1.0 - paper * 0.6);
   gl_FragColor = vec4(rim * a, a);
 }`
 
@@ -134,6 +135,7 @@ export class Character {
     time: { value: 0 },
     energy: { value: 0 },
     strike: { value: 0 },
+    paper: { value: 0 },
     push: { value: 0 },
     rimA: { value: new THREE.Color(0.36, 0.8, 0.86) },
     rimB: { value: new THREE.Color(0.95, 0.36, 0.24) },
@@ -229,6 +231,10 @@ export class Character {
       this.modelTorso = this.hipsRest.distanceTo(sh)
     }
     this.ready = true
+  }
+
+  setTheme(paper: boolean) {
+    this.uniforms.paper.value = paper ? 1 : 0
   }
 
   resize(w: number, h: number) {

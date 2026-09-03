@@ -192,11 +192,11 @@
 					"id": "route",
 					"maxclass": "newobj",
 					"numinlets": 1,
-					"numoutlets": 8,
+					"numoutlets": 9,
 					"patching_rect": [
 						30,
 						545,
-						357,
+						413,
 						22
 					],
 					"outlettype": [
@@ -207,9 +207,25 @@
 						"",
 						"",
 						"",
+						"",
 						""
 					],
-					"text": "route note strike ctl centre gate transport ready"
+					"text": "route note strike ctl centre gate section transport ready"
+				}
+			},
+			{
+				"box": {
+					"id": "pr_sec",
+					"maxclass": "newobj",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"patching_rect": [
+						1120,
+						580,
+						105,
+						22
+					],
+					"text": "print section"
 				}
 			},
 			{
@@ -277,11 +293,11 @@
 					"id": "inst",
 					"maxclass": "newobj",
 					"numinlets": 1,
-					"numoutlets": 6,
+					"numoutlets": 7,
 					"patching_rect": [
 						30,
 						585,
-						196,
+						231,
 						22
 					],
 					"outlettype": [
@@ -290,9 +306,10 @@
 						"",
 						"",
 						"",
+						"",
 						""
 					],
-					"text": "route qin pipa dizi luo gu"
+					"text": "route qin pipa dizi erhu luo gu"
 				}
 			},
 			{
@@ -338,7 +355,7 @@
 					"numinlets": 1,
 					"numoutlets": 1,
 					"patching_rect": [
-						300,
+						260,
 						625,
 						126,
 						22
@@ -356,7 +373,7 @@
 					"numinlets": 1,
 					"numoutlets": 1,
 					"patching_rect": [
-						300,
+						260,
 						660,
 						308,
 						22
@@ -374,7 +391,7 @@
 					"numinlets": 1,
 					"numoutlets": 1,
 					"patching_rect": [
-						570,
+						490,
 						625,
 						126,
 						22
@@ -392,7 +409,7 @@
 					"numinlets": 1,
 					"numoutlets": 1,
 					"patching_rect": [
-						570,
+						490,
 						660,
 						224,
 						22
@@ -405,12 +422,48 @@
 			},
 			{
 				"box": {
+					"id": "pre_erhu",
+					"maxclass": "newobj",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"patching_rect": [
+						720,
+						625,
+						126,
+						22
+					],
+					"outlettype": [
+						""
+					],
+					"text": "prepend midinote"
+				}
+			},
+			{
+				"box": {
+					"id": "poly_erhu",
+					"maxclass": "newobj",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"patching_rect": [
+						720,
+						660,
+						224,
+						22
+					],
+					"outlettype": [
+						"signal"
+					],
+					"text": "poly~ nocturne.erhu 2 @steal 1"
+				}
+			},
+			{
+				"box": {
 					"id": "pre_luo",
 					"maxclass": "newobj",
 					"numinlets": 1,
 					"numoutlets": 1,
 					"patching_rect": [
-						840,
+						950,
 						625,
 						126,
 						22
@@ -428,7 +481,7 @@
 					"numinlets": 1,
 					"numoutlets": 1,
 					"patching_rect": [
-						840,
+						950,
 						660,
 						217,
 						22
@@ -446,7 +499,7 @@
 					"numinlets": 1,
 					"numoutlets": 1,
 					"patching_rect": [
-						1110,
+						1180,
 						625,
 						126,
 						22
@@ -464,7 +517,7 @@
 					"numinlets": 1,
 					"numoutlets": 1,
 					"patching_rect": [
-						1110,
+						1180,
 						660,
 						210,
 						22
@@ -500,7 +553,7 @@
 					"numinlets": 2,
 					"numoutlets": 1,
 					"patching_rect": [
-						300,
+						260,
 						700,
 						56,
 						22
@@ -518,7 +571,25 @@
 					"numinlets": 2,
 					"numoutlets": 1,
 					"patching_rect": [
-						570,
+						490,
+						700,
+						56,
+						22
+					],
+					"outlettype": [
+						"signal"
+					],
+					"text": "*~ 0.7"
+				}
+			},
+			{
+				"box": {
+					"id": "lvl_erhu",
+					"maxclass": "newobj",
+					"numinlets": 2,
+					"numoutlets": 1,
+					"patching_rect": [
+						720,
 						700,
 						56,
 						22
@@ -536,7 +607,7 @@
 					"numinlets": 2,
 					"numoutlets": 1,
 					"patching_rect": [
-						840,
+						950,
 						700,
 						56,
 						22
@@ -554,7 +625,7 @@
 					"numinlets": 2,
 					"numoutlets": 1,
 					"patching_rect": [
-						1110,
+						1180,
 						700,
 						56,
 						22
@@ -628,6 +699,24 @@
 					"patching_rect": [
 						30,
 						835,
+						30,
+						22
+					],
+					"outlettype": [
+						"signal"
+					],
+					"text": "+~"
+				}
+			},
+			{
+				"box": {
+					"id": "bus3b",
+					"maxclass": "newobj",
+					"numinlets": 2,
+					"numoutlets": 1,
+					"patching_rect": [
+						200,
+						805,
 						30,
 						22
 					],
@@ -1015,10 +1104,10 @@
 					"patching_rect": [
 						700,
 						290,
-						620,
+						640,
 						22
 					],
-					"text": "strike events: strike punch|kick midi vel x y rapid — here they kick the spectral smear"
+					"text": "strike events: strike punch|kick|snap midi vel x y rapid — here they kick the spectral smear"
 				}
 			},
 			{
@@ -1026,19 +1115,20 @@
 					"id": "strike",
 					"maxclass": "newobj",
 					"numinlets": 1,
-					"numoutlets": 3,
+					"numoutlets": 4,
 					"patching_rect": [
 						700,
 						320,
-						126,
+						161,
 						22
 					],
 					"outlettype": [
 						"",
 						"",
+						"",
 						""
 					],
-					"text": "route punch kick"
+					"text": "route punch kick snap"
 				}
 			},
 			{
@@ -1075,6 +1165,24 @@
 						""
 					],
 					"text": "140\\, 4 2200"
+				}
+			},
+			{
+				"box": {
+					"id": "sm_snap",
+					"maxclass": "message",
+					"numinlets": 2,
+					"numoutlets": 1,
+					"patching_rect": [
+						880,
+						355,
+						98,
+						22
+					],
+					"outlettype": [
+						""
+					],
+					"text": "220\\, 4 3000"
 				}
 			},
 			{
@@ -2048,6 +2156,18 @@
 			{
 				"patchline": {
 					"source": [
+						"route",
+						5
+					],
+					"destination": [
+						"pr_sec",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
 						"jweb",
 						0
 					],
@@ -2085,7 +2205,7 @@
 				"patchline": {
 					"source": [
 						"route",
-						5
+						6
 					],
 					"destination": [
 						"pr_tr",
@@ -2097,7 +2217,7 @@
 				"patchline": {
 					"source": [
 						"route",
-						6
+						7
 					],
 					"destination": [
 						"pr_rd",
@@ -2196,6 +2316,30 @@
 						3
 					],
 					"destination": [
+						"pre_erhu",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"pre_erhu",
+						0
+					],
+					"destination": [
+						"poly_erhu",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"inst",
+						4
+					],
+					"destination": [
 						"pre_luo",
 						0
 					]
@@ -2217,7 +2361,7 @@
 				"patchline": {
 					"source": [
 						"inst",
-						4
+						5
 					],
 					"destination": [
 						"pre_gu",
@@ -2269,6 +2413,18 @@
 					],
 					"destination": [
 						"lvl_dizi",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"poly_erhu",
+						0
+					],
+					"destination": [
+						"lvl_erhu",
 						0
 					]
 				}
@@ -2360,7 +2516,7 @@
 			{
 				"patchline": {
 					"source": [
-						"lvl_luo",
+						"lvl_erhu",
 						0
 					],
 					"destination": [
@@ -2373,6 +2529,30 @@
 				"patchline": {
 					"source": [
 						"bus3",
+						0
+					],
+					"destination": [
+						"bus3b",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"lvl_luo",
+						0
+					],
+					"destination": [
+						"bus3b",
+						1
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"bus3b",
 						0
 					],
 					"destination": [
@@ -2665,6 +2845,30 @@
 					],
 					"destination": [
 						"sm_kick",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"strike",
+						2
+					],
+					"destination": [
+						"sm_snap",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"sm_snap",
+						0
+					],
+					"destination": [
+						"sm_line",
 						0
 					]
 				}

@@ -261,6 +261,10 @@ export interface BodyControls {
   energy?: number
   /** weight shift -1..1 → pan of the breath */
   lean?: number
+  /** the breath itself, -1 in .. +1 out → 气口 phrase gate */
+  breathSignal?: number
+  /** clinch / seize 0..1 → strings muted at the node, pitch held */
+  seize?: number
 }
 
 // the piece's section (起承转合) shapes every macro below
@@ -329,6 +333,8 @@ const body: Required<BodyControls> = {
   breath: 0,
   energy: 0,
   lean: 0,
+  breathSignal: 0,
+  seize: 0,
 }
 
 export function setBody(c: BodyControls) {
@@ -345,7 +351,7 @@ export function setBody(c: BodyControls) {
   applyMacros()
   echoPanL?.pan.setTargetAtTime(-0.2 - body.width * 0.8, now, 0.4)
   echoPanR?.pan.setTargetAtTime(0.2 + body.width * 0.8, now, 0.4)
-  for (const v of voices) if (v.node) setStringMute(v, body.guard)
+  for (const v of voices) if (v.node) setStringMute(v, Math.max(body.guard, body.seize))
   updateBreath()
 }
 
@@ -479,6 +485,7 @@ function pluckVoice(
   x: number,
   when: number,
   harmonic: boolean,
+  node = 2,
 ) {
   const ac = ctx!
   const f = midiToFreq(midi)
@@ -499,6 +506,7 @@ function pluckVoice(
         color: p.color,
         freq: f,
         harmonic,
+        node,
       })
     const delayMs = (when - ac.currentTime) * 1000
     if (delayMs > 2) setTimeout(send, delayMs)
@@ -521,11 +529,66 @@ export function pluck(
   x = 0.5,
   at = 0,
   harmonic = false,
+  node = 2,
 ) {
   const ac = getContext()
   const v = allocString(instr, null)
-  pluckVoice(v, midi, clamp(force, 0, 1), x, ac.currentTime + at, harmonic)
+  pluckVoice(v, midi, clamp(force, 0, 1), x, ac.currentTime + at, harmonic, node)
 }
+
+/**
+ * 泛音: a closed brush path is answered by the flageolets of its pitches —
+ * light touches at the octave, fifth and double-octave nodes
+ */
+export function flageolets(midis: number[], level: number, x: number) {
+  const nodes = [2, 3, 4]
+  midis.slice(0, 4).forEach((m, i) => {
+    pluck('qin', m, 0.35 + level * 0.4, x, i * 0.16 + Math.random() * 0.03, true, nodes[i % nodes.length])
+  })
+}
+
+// ------------------------------------------------------------- pipa wheel --
+// 轮指: a wheel of outward plucks whose density is a rate, not a tempo.
+// The wheel is fed continuously (from punch rapidity or brush speed) and
+// winds down by itself when the feeding stops.
+const wheel = { rate: 0, level: 0, midi: 60, x: 0.5, next: 0, timer: 0 as ReturnType<typeof setInterval> | 0, lastFeed: 0, finger: 0 }
+
+export function feedWheel(midi: number, rate: number, level: number, x: number) {
+  const ac = getContext()
+  wheel.midi = midi
+  wheel.rate = clamp(rate, 0, 18)
+  wheel.level = clamp(level, 0, 1)
+  wheel.x = x
+  wheel.lastFeed = ac.currentTime
+  if (!wheel.timer) {
+    wheel.next = ac.currentTime + 0.01
+    wheel.timer = setInterval(wheelTick, 40)
+  }
+}
+
+function wheelTick() {
+  const ac = ctx
+  if (!ac) return
+  const now = ac.currentTime
+  // the wheel slows once it is no longer fed, and stops
+  const idle = now - wheel.lastFeed
+  const rate = wheel.rate * Math.max(0, 1 - idle / 1.4)
+  if (rate < 2.5) {
+    clearInterval(wheel.timer)
+    wheel.timer = 0
+    return
+  }
+  // schedule plucks up to 120 ms ahead; each finger of the wheel a little
+  // different in force and position
+  while (wheel.next < now + 0.12) {
+    const finger = wheel.finger++ % 4
+    const f = wheel.level * (0.55 + 0.45 * (finger === 0 ? 1 : 0.7)) * Math.max(0.3, 1 - idle / 1.4)
+    const v = allocString('pipa', null)
+    pluckVoice(v, wheel.midi + (finger === 3 ? 12 : 0), f, wheel.x + (finger - 1.5) * 0.02, wheel.next, false)
+    wheel.next += 1 / rate
+  }
+}
+
 
 /**
  * Brushwork: a slow-moving hand holds one string per slot and slides it
@@ -544,6 +607,8 @@ export function brushTo(
   const now = ac.currentTime
   const v = allocString(instr, slot)
   const fresh = v.lastUse === 0 || now - v.lastUse > 4
+  // seized: the pitch is held where it is; the string can only be damped
+  if (body.seize > 0.5 && !fresh) return
   const jump = Math.abs(midi - v.midi)
   if (fresh || jump >= 5 || (jump >= 1 && now - v.lastUse > 0.7)) {
     // 起 is played in 泛音, the string's harmonics: thin, pure, brief
@@ -560,6 +625,13 @@ export function brushTo(
     v.lastUse = now
     v.pan.pan.setTargetAtTime((x - 0.5) * 1.2, now, 0.1)
   }
+}
+
+/** an onset on a held brush voice: the speed integral crossed a threshold */
+export function brushOnset(slot: number, instr: 'qin' | 'pipa', midi: number, force: number, x: number) {
+  const ac = getContext()
+  const v = allocString(instr, slot)
+  pluckVoice(v, midi, clamp(force, 0, 1), x, ac.currentTime, sectionIdx === 0)
 }
 
 export function brushEnd(slot: number) {
@@ -579,6 +651,8 @@ let breath: {
   gain: GainNode
   pan: StereoPannerNode
   midi: number
+  air: GainNode
+  core: GainNode
 } | null = null
 
 function updateBreath() {
@@ -588,12 +662,14 @@ function updateBreath() {
   const target = body.breath > 0.15 ? Math.pow(body.breath, 1.6) * 0.16 * openSection : 0
   if (target > 0 && !breath) {
     const ac = ctx
+    // the breath is the tone: air through a narrow resonator at the
+    // pitch, with a sine core only as a fundamental underneath
     const noise = ac.createBufferSource()
     noise.buffer = noiseBuffer(ac, 2, 0)
     noise.loop = true
     const bp = ac.createBiquadFilter()
     bp.type = 'bandpass'
-    bp.Q.value = 14
+    bp.Q.value = 22
     const tone = ac.createOscillator()
     tone.type = 'sine'
     // 笛膜: the membrane's buzz sits a hair off the octave
@@ -612,9 +688,12 @@ function updateBreath() {
     gain.gain.value = 0
     const pan = ac.createStereoPanner()
     const toneGain = ac.createGain()
-    toneGain.gain.value = 0.55
+    toneGain.gain.value = 0.3
+    const airGain = ac.createGain()
+    airGain.gain.value = 2.2
     noise.connect(bp)
-    bp.connect(gain)
+    bp.connect(airGain)
+    airGain.connect(gain)
     tone.connect(toneGain)
     toneGain.connect(gain)
     buzz.connect(buzzGain)
@@ -627,11 +706,18 @@ function updateBreath() {
     tone.start()
     buzz.start()
     vib.start()
-    breath = { noise, bp, tone, buzz, vib, vibGain, gain, pan, midi: 0 }
+    breath = { noise, bp, tone, buzz, vib, vibGain, gain, pan, midi: 0, air: airGain, core: toneGain }
     breathPitch(breathMidi)
   }
   if (!breath) return
-  breath.gain.gain.setTargetAtTime(target, now, 0.6)
+  // 气口: the phrase rides the body's own breath — the tone opens on the
+  // out-breath and closes on the in-breath; air pressure sets how much of
+  // the tone is noise (more air, more breath, less core)
+  const phrase = clamp(0.5 + body.breathSignal * 0.9, 0.05, 1)
+  breath.gain.gain.setTargetAtTime(target * phrase, now, 0.4)
+  breath.air.gain.setTargetAtTime(1.4 + Math.max(0, body.breathSignal) * 1.6, now, 0.4)
+  breath.core.gain.setTargetAtTime(0.38 - Math.max(0, body.breathSignal) * 0.2, now, 0.4)
+  breath.bp.Q.setTargetAtTime(14 + (1 - Math.abs(body.breathSignal)) * 14, now, 0.4)
   breath.vibGain.gain.setTargetAtTime(4 + body.energy * 30, now, 0.3)
   breath.pan.pan.setTargetAtTime(body.lean * 0.7, now, 0.5)
   if (target === 0) {
@@ -686,6 +772,79 @@ function diziNote(midi: number, vel: number, dur: number, when: number) {
   tone.start(when)
   noise.stop(when + dur + 1)
   tone.stop(when + dur + 1)
+}
+
+// --------------------------------------------------------------- erhu ---
+// a bowed string for the turning body: the bow's weight arrives over half
+// a second and the pitch is one continuous 滑音. One voice.
+let erhu: {
+  osc: OscillatorNode
+  body1: BiquadFilterNode
+  body2: BiquadFilterNode
+  bow: BiquadFilterNode
+  gain: GainNode
+  pan: StereoPannerNode
+  midi: number
+  lastT: number
+} | null = null
+
+export function erhuTo(midi: number, level: number, x: number, glideMs = 250) {
+  const ac = getContext()
+  const now = ac.currentTime
+  if (!erhu) {
+    const osc = ac.createOscillator()
+    osc.type = 'sawtooth'
+    // bow noise brightens the tone under pressure
+    const bow = ac.createBiquadFilter()
+    bow.type = 'lowpass'
+    bow.frequency.value = 1800
+    bow.Q.value = 0.7
+    const body1 = ac.createBiquadFilter()
+    body1.type = 'peaking'
+    body1.frequency.value = 620
+    body1.Q.value = 2.5
+    body1.gain.value = 9
+    const body2 = ac.createBiquadFilter()
+    body2.type = 'peaking'
+    body2.frequency.value = 1400
+    body2.Q.value = 3
+    body2.gain.value = 6
+    const gain = ac.createGain()
+    gain.gain.value = 0
+    const pan = ac.createStereoPanner()
+    osc.connect(bow)
+    bow.connect(body1)
+    body1.connect(body2)
+    body2.connect(gain)
+    gain.connect(pan)
+    pan.connect(master!)
+    pan.connect(hallSend!)
+    const es = ac.createGain()
+    es.gain.value = 0.3
+    pan.connect(es)
+    es.connect(echoSend!)
+    osc.frequency.value = midiToFreq(midi)
+    osc.start()
+    erhu = { osc, body1, body2, bow, gain, pan, midi, lastT: now }
+  }
+  const f = midiToFreq(midi)
+  const tc = clamp(glideMs / 1000 / 3, 0.02, 0.17)
+  erhu.osc.frequency.setTargetAtTime(f, now, tc)
+  // bow displacement → volume, over ~500 ms
+  erhu.gain.gain.setTargetAtTime(clamp(level, 0, 1) * 0.11, now, 0.17)
+  erhu.bow.frequency.setTargetAtTime(900 + level * 2600, now, 0.2)
+  erhu.pan.pan.setTargetAtTime((x - 0.5) * 1.2, now, 0.2)
+  erhu.midi = midi
+  erhu.lastT = now
+}
+
+export function erhuEnd() {
+  if (!erhu || !ctx) return
+  const e = erhu
+  erhu = null
+  const now = ctx.currentTime
+  e.gain.gain.setTargetAtTime(0, now, 0.25)
+  e.osc.stop(now + 2)
 }
 
 // -------------------------------------------------------------- luogu ---
@@ -835,6 +994,24 @@ function residueBurst(force: number, at: number) {
   )
 }
 
+/**
+ * 亮相 — the body stops dead after fast motion. 撕边一锣: a roll on the
+ * drum's rim rushing into one gong, then nothing.
+ */
+export function snapPose(force: number, x: number) {
+  const ac = getContext()
+  const t0 = ac.currentTime + 0.005
+  force = clamp(force, 0.2, 1) * SECTION_FORCE[sectionIdx]
+  let t = 0
+  for (const gap of [0.09, 0.075, 0.06, 0.05, 0.042, 0.036]) {
+    ban(0.35 * force, t0 + t, x)
+    gu(0.25 * force, t0 + t + 0.004, x)
+    t += gap
+  }
+  luo(50, force, t0 + t, x, true)
+  residueBurst(force * 0.5, t + 0.05)
+}
+
 export type StrikeKind = 'punch' | 'kick'
 
 /**
@@ -862,13 +1039,10 @@ export function strike(
     if (force > 0.35 && sectionIdx > 0) gu(force * 0.7, t0 + 0.052, x)
     luo(midi, force, t0 + 0.1, x, climax && force > 0.7)
     pluck(str, midi, 0.6 + force * 0.4, x, 0)
-    if (rapid >= 3 && sectionIdx >= 1) {
-      // 轮指: a roll of re-plucks, denser with every fast punch
-      const n = Math.min(9, 3 + rapid)
-      const rate = 0.062 - Math.min(0.03, rapid * 0.004)
-      for (let i = 1; i <= n; i++) {
-        pluck(str, midi + (i % 2 ? 0 : 12), (0.7 - i * 0.06) * force, x, 0.08 + i * rate)
-      }
+    if (rapid >= 2 && sectionIdx >= 1) {
+      // 轮指: the wheel turns faster with every fast punch and winds down
+      // on its own — density as a rate, not a roll on a grid
+      feedWheel(midi, 5 + rapid * 2.2, 0.35 + force * 0.5, x)
     }
     residueBurst(force * 0.7 * (climax ? 1 : 0.5), 0.09)
   } else {
@@ -913,6 +1087,10 @@ export function playNote(
       break
     case 'dizi':
       diziNote(midi, vel, dur, now)
+      break
+    case 'erhu':
+      erhuTo(midi, vel, x, 200)
+      setTimeout(erhuEnd, durationMs + 300)
       break
     case 'luo':
       luo(midi, vel, now, x, midi < 55)

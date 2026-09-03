@@ -83,51 +83,36 @@ export function scaleDegree(
 }
 
 /**
- * Convert strokes into a note sequence for the loop transport: x maps to
- * time across one loop, y to pitch, pressure to velocity. Consecutive
- * points on the same quantized step merge into one sustained note.
+ * Convert strokes into a note sequence for the loop transport, 散板: no
+ * grid. x maps to time across one loop continuously, y to pitch, pressure
+ * to velocity; a note lasts as long as the mark stays on its pitch, so the
+ * length of a stroke is its duration.
  */
 export function strokesToNotes(
   strokes: Stroke[],
   loopMs: number,
   scaleName: string,
-  stepsPerLoop = 32,
 ): NoteEvent[] {
-  const stepMs = loopMs / stepsPerLoop
   const notes: NoteEvent[] = []
-
   for (const stroke of strokes) {
     if (stroke.points.length === 0) continue
     let current: NoteEvent | null = null
-    let lastStep = -1
-
     for (const p of stroke.points) {
-      const step = Math.min(
-        stepsPerLoop - 1,
-        Math.max(0, Math.floor(p.x * stepsPerLoop)),
-      )
+      const time = Math.max(0, Math.min(loopMs - 1, p.x * loopMs))
       const midi = yToMidi(p.y, scaleName)
-      const velocity = Math.round(50 + p.pressure * 77)
-
-      if (current && step === lastStep && current.midi === midi) {
-        continue
-      }
-      if (current && current.midi === midi && step === lastStep + 1) {
-        current.durationMs += stepMs
-        lastStep = step
+      if (current && current.midi === midi && time >= current.timeMs) {
+        current.durationMs = Math.max(current.durationMs, time - current.timeMs + 60)
         continue
       }
       current = {
-        timeMs: step * stepMs,
+        timeMs: time,
         pen: stroke.pen,
         midi,
-        velocity,
-        durationMs: stepMs,
+        velocity: Math.round(40 + p.pressure * 80),
+        durationMs: 60,
       }
       notes.push(current)
-      lastStep = step
     }
   }
-
   return notes.sort((a, b) => a.timeMs - b.timeMs)
 }

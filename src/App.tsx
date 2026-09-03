@@ -5,8 +5,13 @@ import {
   armAudio,
   breathPitch,
   brushEnd,
+  brushOnset,
   brushTo,
   ensureAudio,
+  erhuEnd,
+  erhuTo,
+  flageolets,
+  snapPose,
   gateComplete,
   isAwakened,
   playNote,
@@ -20,8 +25,9 @@ import {
 import { PerformanceForm, SECTION_INFO, SECTIONS, type FormState } from './performance'
 import { bindInlet, isMax, outletMessage, outletNote } from './max'
 import { DEFAULT_SCALE, MODE_GLYPH, SCALES, scaleDegree, strokesToNotes, type NoteEvent, type Stroke } from './music'
-import { chordAt } from './harmony'
+import { chordAt, snapToScale } from './harmony'
 import type { BodyState, Phase, Strike } from './sanda'
+import { getTheme, setTheme, type Theme } from './instruments'
 import './App.css'
 
 const PHASES: Record<Phase, { pinyin: string; word: string }> = {
@@ -60,6 +66,26 @@ export default function App() {
   )
   const formStrikesRef = useRef(0)
   const lastBodyRef = useRef<BodyState | null>(null)
+  const erhuOnRef = useRef(false)
+  const erhuMaxRef = useRef(0)
+  const [theme, setThemeState] = useState<Theme>(getTheme())
+
+  // the two grounds: the ink-stone (default) and xuan paper. `?theme=xuan`,
+  // or T to turn the sheet over
+  const applyTheme = useCallback((t: Theme) => {
+    setTheme(t)
+    setThemeState(t)
+    surface.current?.setTheme(t === 'xuan')
+  }, [])
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get('theme')
+    applyTheme(q === 'xuan' ? 'xuan' : 'ink')
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 't' || e.key === 'T') applyTheme(getTheme() === 'ink' ? 'xuan' : 'ink')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [applyTheme])
 
   const surface = useRef<DrawHandle | null>(null)
   const notesRef = useRef<NoteEvent[]>([])
@@ -210,7 +236,7 @@ export default function App() {
           }
           setTimeout(() => outletNote('luo', midi - 5, Math.round(vel * 0.7), 1500), t)
         }
-      } else {
+      } else if (s.kind !== 'snap') {
         audioStrike(s.kind, midi, s.force, s.x, rapid)
       }
     },
@@ -244,6 +270,39 @@ export default function App() {
         setPhase(b.phase)
       }
       for (const s of b.strikes) landStrike(s, b.rapid)
+      // 亮相: the body stops dead after fast motion → 撕边一锣, a seal 定
+      if (b.snap) {
+        const nose = b.joints.nose
+        const x = nose?.x ?? 0.5
+        const y = (nose?.y ?? 0.4) + b.sw * 1.2
+        surface.current?.strike({ kind: 'snap', side: 'L', x, y, dx: 0, dy: -1, force: b.snapForce, t: now, drive: 0 }, '定')
+        if (inMax) {
+          outletMessage('strike', 'snap', 50, Math.round(40 + b.snapForce * 80), Number(x.toFixed(3)), Number(y.toFixed(3)), 0)
+          let t = 0
+          for (const gap of [90, 75, 60, 50, 42, 36]) {
+            setTimeout(() => outletNote('gu', 96, Math.round(35 + b.snapForce * 40), 30), t)
+            t += gap
+          }
+          setTimeout(() => outletNote('luo', 50, Math.round(50 + b.snapForce * 70), 4000), t)
+        } else snapPose(b.snapForce, x)
+      }
+      // a turning torso bows the erhu: one continuous 滑音 around the
+      // centre, the bow's weight arriving with the speed of the turn
+      const turning = b.turnRate > 0.3 && b.sinceStrike > 400
+      if (turning) {
+        const centre = chordAt(scaleRef.current, centreIndex(now), 60)[0]
+        const midi = snapToScale(Math.round(centre + b.lean * 7 + (1 - b.root) * 5), scaleRef.current)
+        if (inMax) {
+          if (now - erhuMaxRef.current > 350) {
+            erhuMaxRef.current = now
+            outletNote('erhu', midi, Math.round(30 + b.turnRate * 80), 500)
+          }
+        } else erhuTo(midi, Math.min(1, b.turnRate * 1.4), 0.5 + b.lean * 0.3, 250)
+        erhuOnRef.current = true
+      } else if (erhuOnRef.current) {
+        erhuOnRef.current = false
+        if (!inMax) erhuEnd()
+      }
 
       // continuous control stream, ~20 Hz
       if (now - lastCtlSentRef.current > 50) {
@@ -255,6 +314,8 @@ export default function App() {
           breath: b.stillness,
           energy: b.energy,
           lean: b.lean,
+          breathSignal: b.breath,
+          seize: b.seize,
         }
         setMeters({ stance: b.stance, root: b.root, breath: b.stillness, energy: b.energy })
         if (inMax) {
@@ -287,33 +348,75 @@ export default function App() {
   )
 
   // ------------------------------------------------------ brushwork --
-  const lastMaxNote = useRef<Record<number, { t: number; midi: number }>>({})
-
+  // the brush as ink, not as a pointer: height is pitch (宫…羽 over two
+  // octaves in the hand's register), the integral of speed decides when
+  // an onset falls, and below a threshold of speed there is silence — the
+  // string rings on. A slow, wet hand is the qin, sliding between onsets
+  // (走手音); a fast, dry hand is the pipa, plucking as it goes.
+  const gest = useRef(new Map<number, { travel: number; last: DrawPoint | null; instr: 'qin' | 'pipa'; lastMaxT: number }>())
   const onDrawPoint = useCallback(
-    (pointerId: number, instr: string, p: DrawPoint) => {
+    (pointerId: number, _instr: string, p: DrawPoint) => {
       if (!gateOpenRef.current) return
       if (!inMax && !isAwakened()) return
       const slot = slotOf(pointerId)
-      const midi = scaleDegree(p.x, scaleRef.current, LOW[slot], 2)
-      const level = Math.min(1, Math.max(0.05, (1 - p.y) * 0.8 + p.pressure * 0.3))
-      if (inMax) {
-        const last = lastMaxNote.current[slot]
-        const now = performance.now()
-        if (!last || last.midi !== midi || now - last.t > 900) {
-          lastMaxNote.current[slot] = { t: now, midi }
-          emit({ timeMs: 0, pen: instr, midi, velocity: Math.round(30 + level * 70), durationMs: 1200 }, p.x)
-        }
-      } else {
-        brushTo(slot, instr === 'pipa' ? 'pipa' : 'qin', midi, level, p.x, p.speed)
+      let g = gest.current.get(pointerId)
+      if (!g) {
+        g = { travel: 0, last: null, instr: 'qin', lastMaxT: 0 }
+        gest.current.set(pointerId, g)
       }
-      surface.current?.notePulse(pointerId, 0.3 + level * 0.4)
+      const dist = g.last ? Math.hypot(p.x - g.last.x, p.y - g.last.y) : 0
+      g.last = p
+      const midi = scaleDegree(1 - p.y, scaleRef.current, LOW[slot], 2)
+      const level = Math.min(1, Math.max(0.05, 0.35 + p.pressure * 0.65))
+      // dry and fast reads as pipa; slow and wet as qin — hysteresis so a
+      // hand does not flicker between them
+      const dry = g.instr === 'pipa' ? p.speed > 0.55 || p.pressure < 0.3 : p.speed > 0.95 || p.pressure < 0.22
+      g.instr = dry ? 'pipa' : 'qin'
+      if (p.speed < 0.12) return // stillness: the mark rings, nothing new
+      g.travel += dist
+      const threshold = g.instr === 'pipa' ? 0.055 : 0.24
+      const now = performance.now()
+      if (g.travel >= threshold) {
+        g.travel = 0
+        const force = Math.min(1, 0.35 + p.speed * 0.35 + p.pressure * 0.3)
+        if (inMax) {
+          g.lastMaxT = now
+          emit({ timeMs: 0, pen: g.instr, midi, velocity: Math.round(30 + force * 90), durationMs: g.instr === 'pipa' ? 400 : 1600 }, p.x)
+        } else brushOnset(slot, g.instr, midi, force, p.x)
+        surface.current?.notePulse(pointerId, 0.4 + force * 0.5)
+      } else if (g.instr === 'qin') {
+        // between onsets the qin slides
+        if (inMax) {
+          if (now - g.lastMaxT > 700) {
+            g.lastMaxT = now
+            emit({ timeMs: 0, pen: 'qin', midi, velocity: Math.round(20 + level * 40), durationMs: 900 }, p.x)
+          }
+        } else brushTo(slot, 'qin', midi, level, p.x, p.speed)
+      }
     },
     [emit, inMax],
   )
 
-  const onDrawEnd = useCallback((pointerId: number) => {
-    brushEnd(slotOf(pointerId))
-  }, [])
+  const onDrawEnd = useCallback(
+    (pointerId: number, path?: DrawPoint[]) => {
+      const slot = slotOf(pointerId)
+      brushEnd(slot)
+      gest.current.delete(pointerId)
+      if (!path || path.length < 12 || !gateOpenRef.current) return
+      // a closed path is answered in 泛音: the harmonics of the pitches it
+      // passed through
+      let length = 0
+      for (let i = 1; i < path.length; i++) length += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y)
+      const closure = Math.hypot(path[path.length - 1].x - path[0].x, path[path.length - 1].y - path[0].y)
+      if (length < 0.25 || closure > 0.18 * length) return
+      const picks = [0.15, 0.5, 0.85].map((f) => path[Math.floor(f * (path.length - 1))])
+      const midis = picks.map((q) => scaleDegree(1 - q.y, scaleRef.current, LOW[slot] + 12, 2))
+      const x = picks.reduce((a, q) => a + q.x, 0) / picks.length
+      if (inMax) midis.forEach((m, i) => setTimeout(() => outletNote('qin', m, 50, 120), i * 160))
+      else flageolets(midis, 0.6, x)
+    },
+    [inMax],
+  )
 
   // the breath follows the slow drift of the tonal centre
   useEffect(() => {
@@ -402,7 +505,7 @@ export default function App() {
 
   const ph = PHASES[phase]
   return (
-    <div className={`app ${gateOpen ? 'open' : 'closed'}`}>
+    <div className={`app ${gateOpen ? 'open' : 'closed'} ${strokes.length > 0 || hits > 0 ? 'marked' : ''} theme-${theme}`}>
       <InkSurface
         strokes={strokes}
         onStrokesChange={setStrokes}
@@ -475,6 +578,7 @@ export default function App() {
         <div className="hints">
           <span>{hits} {hits === 1 ? 'strike' : 'strikes'}</span>
           <span>D view</span>
+          <span>T {theme === 'ink' ? 'paper' : 'stone'}</span>
           <span>P {playing ? 'stop' : 'loop'}</span>
           <span>R clear</span>
         </div>

@@ -51,7 +51,7 @@ export const LM = {
 } as const
 
 export type Side = 'L' | 'R'
-export type StrikeKind = 'punch' | 'kick'
+export type StrikeKind = 'punch' | 'kick' | 'snap'
 export type Phase = '息' | '势' | '发' | '收'
 
 export interface Strike {
@@ -103,6 +103,14 @@ export interface BodyState {
   turn: number
   /** a slow breath signal from the shoulders' rise and fall, -1..1 */
   breath: number
+  /** how fast the torso is turning, 0..1 (throws, spins) */
+  turnRate: number
+  /** clinch / seize: both hands drawn together at the torso, 0..1 */
+  seize: number
+  /** 亮相: the body stopped dead after fast motion, this frame */
+  snap: boolean
+  /** energy at the moment of the snap, 0..1 */
+  snapForce: number
   /** shoulder width in screen fractions */
   sw: number
   /** named joints for the mappings */
@@ -170,7 +178,14 @@ export class SandaTracker {
   private guard = 0
   private lean = 0
   private turn = 0
+  private turnRate = 0
+  private seize = 0
   private breath = 0
+  private energyPeak = 0
+  private peakT = 0
+  private lastSnap = -Infinity
+  private snapNow = false
+  private snapForce = 0
   private shoulderY = 0
   private shoulderYSlow = 0
   private lastStrike: Record<string, number> = {}
@@ -200,6 +215,7 @@ export class SandaTracker {
     const dt = this.lastT ? clamp((t - this.lastT) / 1000, 1 / 120, 0.1) : 1 / 30
     this.lastT = t
     const strikes: Strike[] = []
+    this.snapNow = false
 
     if (!lm || lm.length < N_LM) {
       this.missing++
@@ -295,7 +311,28 @@ export class SandaTracker {
       n++
     }
     const eRaw = n ? clamp(e / n / 3.5, 0, 1) : 0
+    const prevEnergy = this.energy
     this.energy += (eRaw - this.energy) * 0.2
+    // 亮相: fast motion that stops dead. Remember the recent peak; if the
+    // energy collapses below a fifth of it within 350 ms, the body snapped
+    // into a pose
+    if (this.energy > this.energyPeak || t - this.peakT > 350) {
+      this.energyPeak = this.energy
+      this.peakT = t
+    }
+    this.snapNow = false
+    if (
+      this.energyPeak > 0.42 &&
+      this.energy < this.energyPeak * 0.2 &&
+      prevEnergy >= this.energyPeak * 0.2 &&
+      t - this.lastAnyStrike > 300 &&
+      t - this.lastSnap > 900
+    ) {
+      this.snapNow = true
+      this.snapForce = clamp(this.energyPeak, 0, 1)
+      this.lastSnap = t
+      this.energyPeak = 0
+    }
     if (this.energy < 0.09) this.stillness = Math.min(1, this.stillness + dt / 2.2)
     else this.stillness = Math.max(0, this.stillness - dt * (0.8 + this.energy * 4))
 
@@ -332,7 +369,22 @@ export class SandaTracker {
       this.lean += (leanRaw - this.lean) * 0.12
       // torso turn: the shoulder line rotates against the hip line in depth
       const turnRaw = clamp(((ls.z - rs.z) - (lh.z - rh.z)) * 0.8, -1, 1)
+      const prevTurn = this.turn
       this.turn += (turnRaw - this.turn) * 0.12
+      // a spinning torso: the shoulder line sweeping in depth, or the
+      // shoulders travelling fast across the hips
+      const swing = Math.abs(this.turn - prevTurn) / dt * 0.5 + Math.abs(ls.vx + rs.vx) * 0.12
+      this.turnRate += (clamp(swing, 0, 1) - this.turnRate) * 0.25
+    }
+    // seize: the two hands drawn together in front of the torso and held
+    {
+      const lw2 = J(LM.L_WRIST)
+      const rw2 = J(LM.R_WRIST)
+      const together = Math.hypot(lw2.x - rw2.x, lw2.y - rw2.y) / sw
+      const midY = (lw2.y + rw2.y) / 2
+      const atTorso = midY > (ls.y + rs.y) / 2 - sw * 0.2 && midY < (lh.y + rh.y) / 2 + sw * 0.3
+      const seizeRaw = lw2.vis > 0.4 && rw2.vis > 0.4 && together < 0.55 && atTorso && lw2.speed < 1.2 ? 1 : 0
+      this.seize += (seizeRaw - this.seize) * 0.15
     }
     // breath: the shoulders rise and fall slowly against their own trend
     const shY = (ls.y + rs.y) / 2 / sw
@@ -473,6 +525,10 @@ export class SandaTracker {
       guard: this.guard,
       lean: this.lean,
       turn: this.turn,
+      turnRate: this.turnRate,
+      seize: this.seize,
+      snap: this.snapNow,
+      snapForce: this.snapForce,
       breath: this.breath,
       sw: this.sw,
       joints,

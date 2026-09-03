@@ -6,7 +6,12 @@
 //
 // `freq` is a k-rate AudioParam so slides (走手音) are plain automation on
 // the delay length: the ringing string is retuned rather than re-plucked.
-// `mute` is the guard hand damping the strings (按).
+// A slide also rubs the finger along the silk: friction noise proportional
+// to the glide speed enters the loop (yin/rou 吟猱), so a glide decays into
+// friction and then into silence rather than into a clean sustain.
+// `mute` is the guard hand damping the strings (按). A `pluck` with
+// `harmonic` set plays 泛音: the excitation is combed at the touched node
+// (x[n] + x[n − P/node]), removing the partials that have a node there.
 
 const MIN_FREQ = 24
 
@@ -32,21 +37,26 @@ class StringProcessor extends AudioWorkletProcessor {
     this.dcIn = 0
     this.excite = null
     this.exciteIdx = 0
+    this.lastFreq = 0
+    this.friction = 0
     this.port.onmessage = (e) => {
       const m = e.data
       if (m && m.type === 'pluck') this.pluck(m)
     }
   }
 
-  pluck({ force = 0.7, pos = 0.28, color = 0.6, freq = 220, harmonic = false }) {
+  pluck({ force = 0.7, pos = 0.28, color = 0.6, freq = 220, harmonic = false, node = 2 }) {
     // burst length = one period: the string is displaced then let go
     const period = Math.max(2, Math.round(sampleRate / Math.max(MIN_FREQ, freq)))
-    const n = harmonic ? Math.max(8, period >> 1) : period
+    const n = period
     const out = new Float32Array(n)
     // pluck position comb: displacing the string at fraction `pos`
     // notches the harmonics whose nodes sit there
     const combDelay = Math.max(1, Math.round(period * Math.min(0.48, Math.max(0.05, pos))))
-    const raw = new Float32Array(n + combDelay)
+    // 泛音: the light touch at the node keeps only the partials that are
+    // multiples of `node` — a ripple FIR comb on the excitation
+    const nodeDelay = harmonic ? Math.max(1, Math.round(period / Math.max(2, node))) : 0
+    const raw = new Float32Array(n + combDelay + nodeDelay)
     let lp = 0
     const a = 0.15 + color * 0.8
     for (let i = 0; i < raw.length; i++) {
@@ -57,7 +67,9 @@ class StringProcessor extends AudioWorkletProcessor {
     // fade the burst so the attack is a nail, not a click
     for (let i = 0; i < n; i++) {
       const env = Math.min(1, i / 6) * (1 - i / n)
-      out[i] = (raw[i] - raw[i + combDelay] * 0.9) * env * force * 1.6
+      let x = raw[i] - raw[i + combDelay] * 0.9
+      if (nodeDelay) x = 0.5 * (x + (raw[i + nodeDelay] - raw[i + nodeDelay + combDelay] * 0.9))
+      out[i] = x * env * force * (harmonic ? 1.1 : 1.6)
     }
     this.excite = out
     this.exciteIdx = 0
@@ -76,6 +88,14 @@ class StringProcessor extends AudioWorkletProcessor {
     const lpCoef = 0.25 + bright * 0.7
     // guard hand on the strings: heavy extra loss and a duller loop
     const loss = damp * (1 - mute * 0.08)
+    // friction: how fast the finger is sliding, in octaves per second,
+    // smoothed; it feeds a hiss into the loop and costs the string energy
+    if (this.lastFreq > 0) {
+      const glide = Math.abs(Math.log2(freq / this.lastFreq)) * (sampleRate / out.length)
+      this.friction += (Math.min(1, glide * 0.35) - this.friction) * 0.15
+    }
+    this.lastFreq = freq
+    const fr = this.friction
     const buf = this.buf
     const size = this.size
     for (let i = 0; i < out.length; i++) {
@@ -88,7 +108,8 @@ class StringProcessor extends AudioWorkletProcessor {
       const y = buf[i0] + (buf[i1] - buf[i0]) * frac
       // loop lowpass (string stiffness / air loss)
       this.lp += (y - this.lp) * lpCoef
-      let s = this.lp * loss
+      let s = this.lp * loss * (1 - fr * 0.012)
+      if (fr > 0.001) s += (Math.random() * 2 - 1) * fr * 0.02 * (0.3 + Math.abs(this.lp) * 6)
       if (this.excite) {
         s += this.excite[this.exciteIdx++]
         if (this.exciteIdx >= this.excite.length) this.excite = null
