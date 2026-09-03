@@ -71,7 +71,7 @@ export default function BodyLayer({ surface, onBody, open }: Props) {
       }
     }
 
-    const readout = (b: BodyState) => {
+    const readout = (b: BodyState | null) => {
       const cv = overlayRef.current
       if (!cv) return
       const W = window.innerWidth
@@ -84,6 +84,12 @@ export default function BodyLayer({ surface, onBody, open }: Props) {
       if (!g) return
       g.clearRect(0, 0, W, H)
       if (!devRef.current) return
+      if (!b) {
+        g.font = '12px ui-monospace, monospace'
+        g.fillStyle = INK.ash
+        g.fillText(landmarker ? 'pose · waiting for camera frames' : 'pose · no camera — pointer only', 22, H - 40)
+        return
+      }
       const lines = [
         `pose ${b.present ? 'tracking' : 'lost'}   phase ${b.phase}`,
         `energy ${b.energy.toFixed(2)}  stillness ${b.stillness.toFixed(2)}`,
@@ -160,7 +166,7 @@ export default function BodyLayer({ surface, onBody, open }: Props) {
         } catch (err) {
           console.warn('pose detection failed:', err)
         }
-      }
+      } else if (devRef.current && !landmarker) readout(null)
       raf = requestAnimationFrame(loop)
     }
     loop()

@@ -426,7 +426,7 @@ function pluckVoice(
     const P = v.node.parameters
     P.get('freq')!.setValueAtTime(f, when)
     P.get('damp')!.setValueAtTime(p.damp, when)
-    P.get('bright')!.setValueAtTime(p.bright * (0.7 + force * 0.5), when)
+    P.get('bright')!.setValueAtTime(clamp(p.bright * (0.7 + force * 0.5), 0, 1), when)
     const send = () =>
       v.node!.port.postMessage({
         type: 'pluck',

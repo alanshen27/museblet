@@ -238,7 +238,7 @@ export default function App() {
       if (s.kind === 'punch') pointerPunchesRef.current.push(now)
       landStrike(s, pointerPunchesRef.current.length)
       setPhase('发')
-      setTimeout(() => setPhase((p) => (p === '发' ? '收' : p)), 260)
+      setTimeout(() => setPhase((p) => (p === '发' ? '收' : p)), 340)
       setTimeout(() => setPhase((p) => (p === '收' ? '势' : p)), 1200)
     },
     [landStrike],

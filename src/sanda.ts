@@ -345,7 +345,7 @@ export class SandaTracker {
   private state(t: number, present: boolean, strikes: Strike[]): BodyState {
     const since = t - this.lastAnyStrike
     let phase: Phase = '势'
-    if (since < 260) phase = '发'
+    if (since < 340) phase = '发'
     else if (since < 1200) phase = '收'
     else if (this.stillness > 0.55) phase = '息'
     const joints: Record<string, Joint> = {}
