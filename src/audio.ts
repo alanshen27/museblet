@@ -82,9 +82,17 @@ function tunedImpulse(ac: AudioContext, scale: number[]): AudioBuffer {
   return ir
 }
 
+// browsers only let audio start after a gesture; the app arms the engine
+// from its pointer/key listeners and everything before that stays silent
+let armed = false
+export function armAudio() {
+  armed = true
+  if (ctx && ctx.state === 'suspended') void ctx.resume()
+}
+
 function getContext(): AudioContext {
   if (ctx) {
-    if (ctx.state === 'suspended') void ctx.resume()
+    if (armed && ctx.state === 'suspended') void ctx.resume()
     return ctx
   }
   const ac = new AudioContext()
@@ -255,6 +263,65 @@ export interface BodyControls {
   lean?: number
 }
 
+// the piece's section (起承转合) shapes every macro below
+let sectionIdx = 0
+let sectionDensity = 0.15
+// how much of the luogu each section allows
+const SECTION_FORCE = [0.45, 0.8, 1, 0.6]
+
+/**
+ * The form: section index 0..3 and its smoothed density. Long tails and a
+ * held-back luogu in 起, the full battery in 转, a settling in 合.
+ */
+export function setSection(index: number, density: number) {
+  sectionIdx = index
+  sectionDensity = density
+  if (!ctx) return
+  applyMacros()
+}
+
+function applyMacros() {
+  if (!ctx) return
+  const now = ctx.currentTime
+  const open = sectionIdx === 0 || sectionIdx === 3 ? 1 : 0
+  hallWet?.gain.setTargetAtTime(0.28 + body.root * 0.4 + open * 0.2 - sectionDensity * 0.1, now, 0.8)
+  const fb = 0.22 + body.breath * 0.42 - body.energy * 0.14 + open * 0.12 - sectionDensity * 0.1
+  echoFeedL?.gain.setTargetAtTime(clamp(fb, 0.1, 0.72), now, 0.6)
+  echoFeedR?.gain.setTargetAtTime(clamp(fb, 0.1, 0.72), now, 0.6)
+}
+
+/** a cue at the turn of each section: the gong marks the form */
+export function sectionCue(index: number) {
+  const ac = getContext()
+  const t = ac.currentTime + 0.02
+  const root = 45
+  switch (index) {
+    case 0:
+      luo(root + 12, 0.5, t, 0.5, false)
+      pluck('qin', root + 24, 0.5, 0.5, 0.4, true)
+      break
+    case 1:
+      pluck('qin', root + 7, 0.7, 0.4, 0)
+      pluck('qin', root + 12, 0.6, 0.6, 0.35)
+      pluck('pipa', root + 19, 0.5, 0.65, 0.7)
+      break
+    case 2:
+      ban(0.9, t, 0.5)
+      gu(0.9, t + 0.06, 0.5, true)
+      luo(root, 1, t + 0.1, 0.5, true)
+      pluck('pipa', root + 24, 0.9, 0.5, 0.12)
+      pluck('pipa', root + 31, 0.8, 0.55, 0.2)
+      break
+    case 3:
+      luo(root - 5, 0.8, t, 0.5, true)
+      pluck('qin', root + 14, 0.6, 0.5, 0.5)
+      pluck('qin', root + 12, 0.55, 0.5, 1.1)
+      pluck('qin', root + 7, 0.5, 0.5, 1.8)
+      pluck('qin', root, 0.6, 0.5, 2.6)
+      break
+  }
+}
+
 const body: Required<BodyControls> = {
   width: 0.4,
   root: 0.3,
@@ -269,16 +336,13 @@ export function setBody(c: BodyControls) {
   if (!ctx) return
   const now = ctx.currentTime
   widthDepth?.gain.setTargetAtTime(0.0003 + body.width * 0.0032, now, 0.3)
-  hallWet?.gain.setTargetAtTime(0.28 + body.root * 0.5, now, 0.4)
   guardLP?.frequency.setTargetAtTime(
     18000 * Math.pow(0.04, body.guard),
     now,
     0.08,
   )
   // 留白: a still body leaves long tails; a busy one dries the room
-  const fb = 0.22 + body.breath * 0.42 - body.energy * 0.14
-  echoFeedL?.gain.setTargetAtTime(clamp(fb, 0.1, 0.7), now, 0.4)
-  echoFeedR?.gain.setTargetAtTime(clamp(fb, 0.1, 0.7), now, 0.4)
+  applyMacros()
   echoPanL?.pan.setTargetAtTime(-0.2 - body.width * 0.8, now, 0.4)
   echoPanR?.pan.setTargetAtTime(0.2 + body.width * 0.8, now, 0.4)
   for (const v of voices) if (v.node) setStringMute(v, body.guard)
@@ -482,7 +546,8 @@ export function brushTo(
   const fresh = v.lastUse === 0 || now - v.lastUse > 4
   const jump = Math.abs(midi - v.midi)
   if (fresh || jump >= 5 || (jump >= 1 && now - v.lastUse > 0.7)) {
-    pluckVoice(v, midi, clamp(0.3 + level * 0.7, 0, 1), x, now, false)
+    // 起 is played in 泛音, the string's harmonics: thin, pure, brief
+    pluckVoice(v, midi, clamp(0.3 + level * 0.7, 0, 1), x, now, sectionIdx === 0)
     return
   }
   if (jump > 0) {
@@ -519,7 +584,8 @@ let breath: {
 function updateBreath() {
   if (!ctx) return
   const now = ctx.currentTime
-  const target = body.breath > 0.15 ? Math.pow(body.breath, 1.6) * 0.16 : 0
+  const openSection = sectionIdx === 0 || sectionIdx === 3 ? 1.6 : 1
+  const target = body.breath > 0.15 ? Math.pow(body.breath, 1.6) * 0.16 * openSection : 0
   if (target > 0 && !breath) {
     const ac = ctx
     const noise = ac.createBufferSource()
@@ -787,33 +853,38 @@ export function strike(
 ) {
   const ac = getContext()
   const t0 = ac.currentTime + 0.005
-  force = clamp(force, 0.15, 1)
+  force = clamp(force, 0.15, 1) * SECTION_FORCE[sectionIdx]
+  const climax = sectionIdx === 2
+  // in the close the fist speaks through the qin, not the pipa
+  const str: 'qin' | 'pipa' = sectionIdx === 3 ? 'qin' : 'pipa'
   if (kind === 'punch') {
     ban(0.5 + force * 0.5, t0, x)
-    if (force > 0.35) gu(force * 0.7, t0 + 0.052, x)
-    luo(midi, force, t0 + 0.1, x, force > 0.82)
-    pluck('pipa', midi, 0.6 + force * 0.4, x, 0)
-    if (rapid >= 3) {
+    if (force > 0.35 && sectionIdx > 0) gu(force * 0.7, t0 + 0.052, x)
+    luo(midi, force, t0 + 0.1, x, climax && force > 0.7)
+    pluck(str, midi, 0.6 + force * 0.4, x, 0)
+    if (rapid >= 3 && sectionIdx >= 1) {
       // 轮指: a roll of re-plucks, denser with every fast punch
       const n = Math.min(9, 3 + rapid)
       const rate = 0.062 - Math.min(0.03, rapid * 0.004)
       for (let i = 1; i <= n; i++) {
-        pluck('pipa', midi + (i % 2 ? 0 : 12), (0.7 - i * 0.06) * force, x, 0.08 + i * rate)
+        pluck(str, midi + (i % 2 ? 0 : 12), (0.7 - i * 0.06) * force, x, 0.08 + i * rate)
       }
     }
-    residueBurst(force * 0.7, 0.09)
+    residueBurst(force * 0.7 * (climax ? 1 : 0.5), 0.09)
   } else {
     gu(force, t0, x, true)
     luo(midi - 12, force, t0 + 0.012, x, true)
-    pluck('pipa', midi + 12, 0.7 + force * 0.3, x, 0)
-    pluck('pipa', midi + 19, 0.5 + force * 0.3, x, 0.045)
-    // 冲头: the clapper rushes, closing the gap into the second gong
-    let t = 0.24
-    for (const gap of [0.13, 0.1, 0.075, 0.055, 0.045]) {
-      ban(0.55 * force, t0 + t, x)
-      t += gap
+    pluck(str, midi + 12, 0.7 + force * 0.3, x, 0)
+    pluck(str, midi + 19, 0.5 + force * 0.3, x, 0.045)
+    if (climax) {
+      // 冲头: the clapper rushes, closing the gap into the second gong
+      let t = 0.24
+      for (const gap of [0.13, 0.1, 0.075, 0.055, 0.045]) {
+        ban(0.55 * force, t0 + t, x)
+        t += gap
+      }
+      luo(midi - 5, force * 0.7, t0 + t, x, false)
     }
-    luo(midi - 5, force * 0.7, t0 + t, x, false)
     residueBurst(force, 0.12)
   }
 }

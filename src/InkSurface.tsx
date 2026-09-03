@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { Stroke } from './music'
 import { getInstrument, INK } from './instruments'
-import { InkFluid } from './InkFluid'
+import { Scene, type Mood } from './Scene'
+import { Character } from './Character'
 import { FIGURE, type BodyState, type Joint, type Strike } from './sanda'
 
 export interface DrawPoint {
@@ -35,6 +36,8 @@ export interface DrawHandle {
   strike: (s: Strike, glyph: string) => void
   /** gate progress 0..1 and whether it has opened */
   setGate: (progress: number, open: boolean) => void
+  /** the piece's mood for the landscape: density, breath, lean, section */
+  setMood: (m: Partial<Mood>) => void
 }
 
 interface Props {
@@ -195,8 +198,10 @@ export default function InkSurface({
   handleRef,
 }: Props) {
   const glRef = useRef<HTMLCanvasElement>(null)
+  const charRef = useRef<HTMLCanvasElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const fluid = useRef<InkFluid | null>(null)
+  const fluid = useRef<Scene | null>(null)
+  const character = useRef<Character | null>(null)
   const activeStrokes = useRef(new Map<number, Stroke>())
   const pointerState = useRef(
     new Map<number, { last: { x: number; y: number; t: number } | null; weight: number; speed: number; born: number; path: DrawPoint[] }>(),
@@ -309,6 +314,7 @@ export default function InkSurface({
     const F = fluid.current
     if (F?.ok) {
       const b = body.current
+      F.setBody(b?.present && b.all.length === 33 ? b.all : null, b?.sw ?? 0.2)
       if (b?.present) {
         const stir = (name: string, j: Joint, amount: number, radius: number) => {
           if (j.vis < 0.4) return
@@ -324,11 +330,9 @@ export default function InkSurface({
           const c = hex(INK.paper)
           F.splat(j.x, j.y, (dx / dt) * 0.35, (dy / dt) * 0.35, [c[0] * ink, c[1] * ink, c[2] * ink], radius, 1)
         }
-        stir('lWrist', b.joints.lWrist, 0.05, 0.02)
-        stir('rWrist', b.joints.rWrist, 0.05, 0.02)
-        stir('lAnkle', b.joints.lAnkle, 0.02, 0.025)
-        stir('rAnkle', b.joints.rAnkle, 0.02, 0.025)
-        stir('nose', b.joints.nose, 0, 0.03)
+        // the obstacle pass moves the mist; the hands add a little ink
+        stir('lWrist', b.joints.lWrist, 0.04, 0.016)
+        stir('rWrist', b.joints.rWrist, 0.04, 0.016)
       }
       if (hover.current) {
         const prev = lastStir.current.get('hover')
@@ -351,6 +355,11 @@ export default function InkSurface({
       F.step(dt)
       F.render()
     }
+    // the character: the premade rig driven by the tracked joints
+    if (character.current) {
+      character.current.update(body.current, w / h, dt)
+      character.current.render()
+    }
 
     g.setTransform(1, 0, 0, 1, 0, 0)
     g.clearRect(0, 0, w, h)
@@ -366,32 +375,16 @@ export default function InkSurface({
     const gt = gate.current
     const opened = gt.open ? Math.min(1, (now - gt.openedAt) / 1400) : 0
 
-    // ---- the ground: one brushed horizon the figure stands on ---------
-    if (opened > 0) {
+    // the waterline lives in the WebGL room; without it, one brushed horizon
+    if (opened > 0 && !F?.ok) {
       const y = h * 0.82
       const ease = 1 - Math.pow(1 - opened, 3)
-      const x0 = w * (0.5 - 0.42 * ease)
-      const x1 = w * (0.5 + 0.42 * ease)
       g.strokeStyle = rgba(INK.ash, 0.28)
       g.lineWidth = 1.2 * dpr
       g.beginPath()
-      const n = 40
-      for (let i = 0; i <= n; i++) {
-        const t = i / n
-        const x = x0 + (x1 - x0) * t
-        const wob = Math.sin(t * 9 + 1.3) * 1.6 + Math.sin(t * 23) * 0.6
-        if (i === 0) g.moveTo(x, y + wob * dpr)
-        else g.lineTo(x, y + wob * dpr)
-      }
+      g.moveTo(w * (0.5 - 0.42 * ease), y)
+      g.lineTo(w * (0.5 + 0.42 * ease), y)
       g.stroke()
-      // the line tapers to nothing at both ends
-      const fade = g.createLinearGradient(x0, 0, x1, 0)
-      fade.addColorStop(0, rgba(INK.ground, 1))
-      fade.addColorStop(0.12, rgba(INK.ground, 0))
-      fade.addColorStop(0.88, rgba(INK.ground, 0))
-      fade.addColorStop(1, rgba(INK.ground, 1))
-      g.fillStyle = fade
-      g.fillRect(x0, y - 4 * dpr, x1 - x0, 8 * dpr)
     }
 
     // ---- the ink ghost: the body as a few brush lines -----------------
@@ -441,13 +434,17 @@ export default function InkSurface({
         }
       }
       const trailAmt = Math.min(1, energy * 1.6)
-      for (let i = 0; i < frames.length - 1; i += 2) {
-        const age = (now - frames[i].t) / 480
-        if (age > 1) continue
-        drawFigure(frames[i], (1 - age) * 0.22 * trailAmt, 1.3, INK.ash, 0)
-      }
       const flash = b.sinceStrike < 140 ? (1 - b.sinceStrike / 140) * 0.7 : 0
-      drawFigure(frames[frames.length - 1], gt.open ? 0.55 : 0.38, 2.2, INK.ash, flash)
+      // the character carries the figure; the ink lines only stand in for
+      // it when the WebGL room is unavailable
+      if (!F?.ok) {
+        for (let i = 0; i < frames.length - 1; i += 2) {
+          const age = (now - frames[i].t) / 480
+          if (age > 1) continue
+          drawFigure(frames[i], (1 - age) * 0.22 * trailAmt, 1.3, INK.ash, 0)
+        }
+        drawFigure(frames[frames.length - 1], gt.open ? 0.55 : 0.38, 2.2, INK.ash, flash)
+      }
       g.globalAlpha = 1
 
       // 残影: the striking limbs leave a ribbon of their path
@@ -762,8 +759,10 @@ export default function InkSurface({
   useEffect(() => {
     const canvas = canvasRef.current
     const glc = glRef.current
-    if (!canvas || !glc) return
-    if (!fluid.current) fluid.current = new InkFluid(glc)
+    const cc = charRef.current
+    if (!canvas || !glc || !cc) return
+    if (!fluid.current) fluid.current = new Scene(glc)
+    if (!character.current) character.current = new Character(cc)
     const resize = () => {
       const rect = canvas.getBoundingClientRect()
       const dpr = devicePixelRatio
@@ -773,6 +772,7 @@ export default function InkSurface({
       glc.width = Math.round(rect.width * Math.min(dpr, 1.5))
       glc.height = Math.round(rect.height * Math.min(dpr, 1.5))
       fluid.current?.resize()
+      character.current?.resize(Math.round(rect.width * Math.min(dpr, 2)), Math.round(rect.height * Math.min(dpr, 2)))
     }
     resize()
     const observer = new ResizeObserver(resize)
@@ -851,7 +851,9 @@ export default function InkSurface({
         if (open && !gt.open) gt.openedAt = performance.now()
         gt.progress = progress
         gt.open = open
+        fluid.current?.setMood({ gate: open ? 1 : 0 })
       },
+      setMood: (m) => fluid.current?.setMood(m),
     }
     return () => {
       handleRef.current = null
@@ -891,6 +893,7 @@ export default function InkSurface({
   return (
     <div className="ink-surface">
       <canvas ref={glRef} className="ink-fluid" />
+      <canvas ref={charRef} className="ink-character" />
       <canvas
         ref={canvasRef}
         className="ink-marks"
@@ -930,6 +933,7 @@ export default function InkSurface({
                 dy: (z.y - a.y) / d,
                 force: Math.min(1, Math.max(0.25, speed / 3)),
                 t: performance.now(),
+                drive: 0.3,
               })
               return
             }

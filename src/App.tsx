@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import InkSurface, { type DrawHandle, type DrawPoint } from './InkSurface'
 import BodyLayer, { LEFT_HAND, RIGHT_HAND } from './BodyLayer'
 import {
+  armAudio,
   breathPitch,
   brushEnd,
   brushTo,
@@ -9,11 +10,14 @@ import {
   gateComplete,
   isAwakened,
   playNote,
+  sectionCue,
   setBody as setAudioBody,
   setGate as setAudioGate,
   setScaleName,
+  setSection as setAudioSection,
   strike as audioStrike,
 } from './audio'
+import { PerformanceForm, SECTION_INFO, SECTIONS, type FormState } from './performance'
 import { bindInlet, isMax, outletMessage, outletNote } from './max'
 import { DEFAULT_SCALE, MODE_GLYPH, SCALES, scaleDegree, strokesToNotes, type NoteEvent, type Stroke } from './music'
 import { chordAt } from './harmony'
@@ -47,7 +51,15 @@ export default function App() {
   const [gateProgress, setGateProgress] = useState(0)
   const [bodySeen, setBodySeen] = useState(false)
   const [hits, setHits] = useState(0)
+  const [form, setForm] = useState<FormState | null>(null)
+  const [cue, setCue] = useState<{ section: string; n: number } | null>(null)
   const inMax = isMax()
+  // `?form=brisk` runs the piece at a third of its length, for rehearsal
+  const formRef = useRef(
+    new PerformanceForm(new URLSearchParams(window.location.search).get('form') === 'brisk' ? 0.3 : 1),
+  )
+  const formStrikesRef = useRef(0)
+  const lastBodyRef = useRef<BodyState | null>(null)
 
   const surface = useRef<DrawHandle | null>(null)
   const notesRef = useRef<NoteEvent[]>([])
@@ -89,25 +101,52 @@ export default function App() {
     setGateOpen(true)
     setGateProgress(1)
     surface.current?.setGate(1, true)
+    formRef.current.start(performance.now())
     if (inMax) outletMessage('gate', 'open')
     else gateComplete()
+  }, [inMax])
+
+  // the piece: the form advances with time and bends with the body, and
+  // every section turn is cued in sound, image and to Max
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!gateOpenRef.current) return
+      const b = lastBodyRef.current
+      const st = formRef.current.update(performance.now(), {
+        energy: b?.energy ?? 0,
+        stillness: b?.stillness ?? 0,
+        strikes: formStrikesRef.current,
+        present: b?.present ?? false,
+      })
+      formStrikesRef.current = 0
+      setForm(st)
+      surface.current?.setMood({ density: st.density, section: st.index, breath: b?.breath ?? 0, lean: b?.lean ?? 0 })
+      if (inMax) {
+        if (st.changed) outletMessage('section', st.section, st.index, st.resting ? 1 : 0)
+      } else {
+        setAudioSection(st.index, st.density)
+        if (st.changed && !st.resting) sectionCue(st.index)
+      }
+      if (st.changed && !st.resting) setCue((c) => ({ section: st.section, n: (c?.n ?? 0) + 1 }))
+    }, 120)
+    return () => clearInterval(id)
   }, [inMax])
 
   useEffect(() => {
     // hold the pointer anywhere, or press Enter, to open without a camera
     const down = () => {
+      armAudio()
+      void ensureAudio()
       if (gateOpenRef.current) return
       pointerHoldRef.current = performance.now()
-      void ensureAudio()
     }
     const up = () => {
       pointerHoldRef.current = null
     }
     const key = (e: KeyboardEvent) => {
-      if (e.key === 'Enter') {
-        void ensureAudio()
-        openGate()
-      }
+      armAudio()
+      void ensureAudio()
+      if (e.key === 'Enter') openGate()
     }
     window.addEventListener('pointerdown', down)
     window.addEventListener('pointerup', up)
@@ -146,6 +185,7 @@ export default function App() {
       const vel = Math.round(40 + s.force * 87)
       surface.current?.strike(s, glyphFor(s, rapid))
       setHits((h) => h + 1)
+      formStrikesRef.current++
       if (inMax) {
         outletMessage('strike', s.kind, midi, vel, Number(s.x.toFixed(3)), Number(s.y.toFixed(3)), rapid)
         // the luogu cell, spelled out as notes so simple patches still speak
@@ -179,6 +219,7 @@ export default function App() {
   const onBody = useCallback(
     (b: BodyState) => {
       const now = performance.now()
+      lastBodyRef.current = b
       if (b.present && !bodySeen) setBodySeen(true)
       // the gate: stand in frame and hold still
       if (!gateOpenRef.current) {
@@ -371,7 +412,14 @@ export default function App() {
         onPointerStrike={onPointerStrike}
         handleRef={surface}
       />
-      <BodyLayer surface={surface} onBody={onBody} open={gateOpen} />
+      <BodyLayer
+        surface={surface}
+        onBody={onBody}
+        open={gateOpen}
+        section={form?.index ?? 0}
+        pieceSeconds={(form?.elapsed ?? 0) / 1000}
+        sectionSeconds={(form?.sectionElapsed ?? 0) / 1000}
+      />
 
       <header className="masthead">
         <h1>nocturne</h1>
@@ -379,6 +427,28 @@ export default function App() {
           <span className="cjk">拓</span> a rubbing of the body in ink
         </p>
       </header>
+
+      <nav className="form" aria-label="performance form">
+        {SECTIONS.map((sec, i) => {
+          const active = form?.index === i
+          const done = (form?.index ?? -1) > i
+          return (
+            <div key={sec} className={`form-sec ${active ? 'active' : ''} ${done ? 'done' : ''} ${form?.resting ? 'resting' : ''}`}>
+              <span className="form-glyph cjk">{sec}</span>
+              <span className="form-word">{SECTION_INFO[sec].pinyin}</span>
+              <span className="form-bar">
+                <i style={{ transform: `scaleX(${active ? (form?.progress ?? 0).toFixed(3) : done ? 1 : 0})` }} />
+              </span>
+            </div>
+          )
+        })}
+      </nav>
+
+      {cue && (
+        <div key={cue.n} className="cue" aria-hidden>
+          <span className="cjk">{cue.section}</span>
+        </div>
+      )}
 
       <aside className={`phase phase-${phase}`} aria-live="polite">
         <span className="phase-glyph">{phase}</span>
