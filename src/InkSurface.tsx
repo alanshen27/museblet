@@ -220,7 +220,7 @@ export default function InkSurface({
   const character = useRef<Character | null>(null)
   const activeStrokes = useRef(new Map<number, Stroke>())
   const pointerState = useRef(
-    new Map<number, { last: { x: number; y: number; t: number } | null; weight: number; speed: number; born: number; path: DrawPoint[] }>(),
+    new Map<number, { last: { x: number; y: number; t: number } | null; weight: number; speed: number; born: number; path: DrawPoint[]; times: number[] }>(),
   )
   const strokesRef = useRef(strokes)
   strokesRef.current = strokes
@@ -899,6 +899,7 @@ export default function InkSurface({
       speed: 0,
       born: performance.now(),
       path: [],
+      times: [],
     }
     const now = performance.now()
     if (state.last) {
@@ -915,6 +916,7 @@ export default function InkSurface({
     const pressure = e.pressure > 0 && e.pressure !== 0.5 ? e.pressure : state.weight
     const p = { x, y, pressure, speed: state.speed }
     state.path.push(p)
+    state.times.push(now)
     return p
   }
 
@@ -928,7 +930,7 @@ export default function InkSurface({
         style={{ touchAction: 'none' }}
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId)
-          pointerState.current.set(e.pointerId, { last: null, weight: 0.5, speed: 0, born: performance.now(), path: [] })
+          pointerState.current.set(e.pointerId, { last: null, weight: 0.5, speed: 0, born: performance.now(), path: [], times: [] })
           strokeStart(e.pointerId, penId, toPoint(e))
         }}
         onPointerMove={(e) => {
@@ -941,17 +943,27 @@ export default function InkSurface({
           hover.current = null
         }}
         onPointerUp={(e) => {
-          // a short fast flick with the pointer is a strike: judged by
-          // velocity (screen widths per second), like the body's fists
+          // a short fast flick with the pointer is a strike. Judged by
+          // velocity like the body's fists: the peak speed over any short
+          // stretch of the gesture (a flick is fast in the middle), or a
+          // brisk average over the whole of it
           const st = pointerState.current.get(e.pointerId)
           const dur = st ? Math.max(16, performance.now() - st.born) : Infinity
-          if (st && dur < 520 && st.path.length >= 2) {
+          if (st && dur < 700 && st.path.length >= 2) {
             const a = st.path[0]
             const z = st.path[st.path.length - 1]
             const d = Math.hypot(z.x - a.x, z.y - a.y)
-            const speed = d / (dur / 1000)
-            if (d > 0.05 && speed > 0.55) {
+            const avg = d / (dur / 1000)
+            let peak = 0
+            for (let i = 2; i < st.path.length; i++) {
+              const p0 = st.path[i - 2]
+              const p1 = st.path[i]
+              const dt = Math.max(8, st.times[i] - st.times[i - 2]) / 1000
+              peak = Math.max(peak, Math.hypot(p1.x - p0.x, p1.y - p0.y) / dt)
+            }
+            if (d > 0.04 && (avg > 0.45 || peak > 1.1)) {
               strokeCancel(e.pointerId)
+              const speed = Math.max(avg, peak * 0.6)
               onPointerStrikeRef.current?.({
                 kind: Math.abs(z.y - a.y) > Math.abs(z.x - a.x) * 1.8 ? 'kick' : 'punch',
                 side: z.x < 0.5 ? 'L' : 'R',

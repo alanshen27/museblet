@@ -338,8 +338,10 @@ export default function App() {
   )
 
   const onPointerStrike = useCallback((s: Strike) => {
+    armAudio()
     void ensureAudio()
-    if (!gateOpenRef.current) return
+    // a flick is intent enough: it opens the gate and lands
+    if (!gateOpenRef.current) openGate()
     const now = performance.now()
     pointerPunchesRef.current = pointerPunchesRef.current.filter((t) => now - t < 1200)
     if (s.kind === 'punch') pointerPunchesRef.current.push(now)
@@ -357,7 +359,7 @@ export default function App() {
       source: 'pointer',
       t: now,
     })
-  }, [])
+  }, [openGate])
 
   // ------------------------------------------------------ brushwork --
   // the brush as ink, not as a pointer: height is pitch (宫…羽 over two
