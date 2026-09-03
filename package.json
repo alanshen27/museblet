@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:sanda": "vite --open /test/sanda"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",
