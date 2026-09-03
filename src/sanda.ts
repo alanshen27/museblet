@@ -193,6 +193,17 @@ export class SandaTracker {
         continue
       }
       const jump = Math.hypot(rx - j.x, ry - j.y)
+      if (jump > sw * 1.2 || j.vis < 0.2) {
+        // no limb covers more than a shoulder-width in one frame: this is
+        // tracking snapping to a new guess, not motion — follow it, but
+        // carry no velocity out of it
+        j.x = rx
+        j.y = ry
+        j.vx = j.vy = j.speed = 0
+        j.vis += (vis - j.vis) * 0.3
+        j.t = t
+        continue
+      }
       const a = clamp(0.35 + (jump / sw) * 1.2, 0.35, 0.95)
       const nx = j.x + (rx - j.x) * a
       const ny = j.y + (ry - j.y) * a
