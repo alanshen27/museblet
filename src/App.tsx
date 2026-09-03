@@ -128,6 +128,7 @@ export default function App() {
         if (st.changed && !st.resting) sectionCue(st.index)
       }
       if (st.changed && !st.resting) setCue((c) => ({ section: st.section, n: (c?.n ?? 0) + 1 }))
+      if (st.changed) console.debug(`[form] ${st.section} (${st.index}) at ${(st.elapsed / 1000).toFixed(1)}s${st.resting ? ' · resting' : ''}`)
     }, 120)
     return () => clearInterval(id)
   }, [inMax])

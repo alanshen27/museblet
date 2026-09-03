@@ -190,7 +190,9 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
       if (ghost) {
         // the ghost performer: before the gate opens it stands and
         // breathes, so the gate opens itself; then it plays the piece
-        const t = openRef.current ? secondsRef.current : (now - ghostSince) / 1000
+        // one continuous clock for the performer's motion; the section and
+        // its own time come from the form once the gate is open
+        const t = (now - ghostSince) / 1000
         const frame = demoPose(t, openRef.current ? sectionRef.current : 0, openRef.current ? sectionSecRef.current : t)
         feed(tracker.update(frame.landmarks, now, frame.world))
       } else if (landmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {

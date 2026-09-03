@@ -83,7 +83,8 @@ export class PerformanceForm {
     body: { energy: number; stillness: number; strikes: number; present: boolean },
   ): FormState {
     if (!this.started) this.start(t)
-    const dt = Math.min(200, Math.max(0, t - this.lastT)) / this.speed
+    // a slow frame must not lose musical time; only a hidden tab's long gap is clipped
+    const dt = Math.min(1000, Math.max(0, t - this.lastT)) / this.speed
     this.lastT = t
     let changed = false
 

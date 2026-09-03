@@ -250,12 +250,12 @@ export function demoPose(tSec: number, section: number, sectionSec = tSec): Demo
   // project to the image: a camera ~2.6 m back, the figure framed head to
   // toe. A webcam frame is a photograph — the subject's left (+x here) lands
   // on the image's right — and the tracker mirrors it into the selfie view
-  const camZ = 2.6
+  const camZ = 3.1
   const f = 1.15
   const landmarks: PoseLM[] = W.map((p) => {
     const depth = camZ + p.z
     const px = (p.x * f) / depth
-    const py = ((p.y + 0.15) * f) / depth
+    const py = ((p.y + 0.32) * f) / depth
     return { x: 0.5 + px, y: 0.5 + py, z: p.z, visibility: 1 }
   })
   const world: PoseLM[] = W.map((p) => ({ x: p.x, y: p.y, z: p.z, visibility: 1 }))
