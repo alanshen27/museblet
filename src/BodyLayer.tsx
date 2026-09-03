@@ -120,7 +120,7 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
         return
       }
       const lines = [
-        `${ghost ? 'ghost performer' : `pose ${modelName}`} ${b.present ? 'tracking' : 'lost'}   phase ${b.phase}`,
+        `${ghost ? 'ghost performer' : `pose ${modelName}`} ${b.present ? 'tracking' : 'lost'}   phase ${b.phase}   section ${sectionRef.current} @ ${sectionSecRef.current.toFixed(1)}s   piece ${secondsRef.current.toFixed(1)}s`,
         `energy ${b.energy.toFixed(2)}  stillness ${b.stillness.toFixed(2)}  breath ${b.breath.toFixed(2)}`,
         `stance ${b.stance.toFixed(2)}  root ${b.root.toFixed(2)}  guard ${b.guard.toFixed(2)}  lean ${b.lean.toFixed(2)}  turn ${b.turn.toFixed(2)}`,
         `L wrist ${b.joints.lWrist?.speed.toFixed(1) ?? '-'}  R wrist ${b.joints.rWrist?.speed.toFixed(1) ?? '-'}  (punch > ${PUNCH_SPEED})`,

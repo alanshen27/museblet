@@ -42,7 +42,7 @@ export interface FormState {
   resting: boolean
   /** ms since the piece began */
   elapsed: number
-  /** ms since the current section began */
+  /** real ms since the current section began */
   sectionElapsed: number
 }
 
@@ -57,6 +57,7 @@ export class PerformanceForm {
   private resting = false
   private restSince = 0
   private started = false
+  private sectionStartT = 0
 
   constructor(speed = 1) {
     this.speed = speed
@@ -64,6 +65,7 @@ export class PerformanceForm {
 
   start(t: number) {
     this.startT = t
+    this.sectionStartT = t
     this.lastT = t
     this.index = 0
     this.acc = 0
@@ -106,6 +108,7 @@ export class PerformanceForm {
       if (this.acc >= LENGTHS[this.index]) {
         this.acc -= LENGTHS[this.index]
         this.index++
+        this.sectionStartT = t
         changed = true
         if (this.index >= 4) {
           this.index = 3
@@ -129,7 +132,7 @@ export class PerformanceForm {
       changed,
       resting: this.resting,
       elapsed: t - this.startT,
-      sectionElapsed: this.acc,
+      sectionElapsed: t - this.sectionStartT,
     }
   }
 }

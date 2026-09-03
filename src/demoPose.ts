@@ -32,6 +32,24 @@ const FOREARM = 0.27
 const THIGH = 0.45
 const SHIN = 0.43
 
+interface Arms {
+  L: V3
+  R: V3
+  bendL: number
+  bendR: number
+}
+
+// the performer remembers where its hands were, for the section blends
+const memo = {
+  section: -1,
+  from: null as Arms | null,
+  last: null as Arms | null,
+  since: 9,
+  lastT: 0,
+  stanceW: 0.26,
+  crouch: 0.02,
+}
+
 export interface DemoFrame {
   landmarks: PoseLM[]
   world: PoseLM[]
@@ -41,13 +59,6 @@ export interface DemoFrame {
  * @param tSec seconds since the piece opened
  * @param section 0..3 (起承转合)
  */
-interface Arms {
-  L: V3
-  R: V3
-  bendL: number
-  bendR: number
-}
-
 /**
  * @param tSec seconds since the piece opened
  * @param section 0..3 (起承转合)
@@ -60,9 +71,15 @@ export function demoPose(tSec: number, section: number, sectionSec = tSec): Demo
   const sway = Math.sin(t * 0.31) * 0.02
   const W: V3[] = Array.from({ length: N_LM }, () => v(0, 0, 0))
 
-  // stance: feet widen in the later sections, the body sits a little lower
-  const stanceW = section >= 2 ? 0.42 : section === 1 ? 0.34 : 0.26
-  const crouch = section >= 2 ? 0.08 : 0.02
+  // stance: feet widen in the later sections, the body sits a little lower;
+  // the feet shift there over a couple of seconds rather than jumping
+  const stanceTarget = section >= 2 ? 0.42 : section === 1 ? 0.34 : 0.26
+  const crouchTarget = section >= 2 ? 0.08 : 0.02
+  const dtm = Math.max(0, Math.min(0.1, tSec - memo.lastT))
+  memo.stanceW += (stanceTarget - memo.stanceW) * Math.min(1, dtm * 0.9)
+  memo.crouch += (crouchTarget - memo.crouch) * Math.min(1, dtm * 0.9)
+  const stanceW = memo.stanceW
+  const crouch = memo.crouch
   const hipY = 0 + crouch
   W[LM.L_HIP] = v(HIP_W / 2 + sway, hipY, 0)
   W[LM.R_HIP] = v(-HIP_W / 2 + sway, hipY, 0)
@@ -204,19 +221,28 @@ export function demoPose(tSec: number, section: number, sectionSec = tSec): Demo
     }
   }
   const cur = armsFor(section, sectionSec)
+  // a section change eases out of wherever the hands actually were, so the
+  // performer never teleports (the tracker would read that as a punch)
+  if (section !== memo.section) {
+    memo.section = section
+    memo.from = memo.last
+    memo.since = 0
+  }
   let targetL = cur.L
   let targetR = cur.R
   let bendL = cur.bendL
   let bendR = cur.bendR
-  if (section > 0 && sectionSec < 1.8) {
-    // ease out of the previous section's pose
-    const prev = armsFor(section - 1, sectionSec + 60)
-    const k = ease(sectionSec / 1.8)
+  if (memo.from && memo.since < 2.6) {
+    const prev = memo.from
+    const k = ease(memo.since / 2.6)
     targetL = v(lerp(prev.L.x, cur.L.x, k), lerp(prev.L.y, cur.L.y, k), lerp(prev.L.z, cur.L.z, k))
     targetR = v(lerp(prev.R.x, cur.R.x, k), lerp(prev.R.y, cur.R.y, k), lerp(prev.R.z, cur.R.z, k))
     bendL = lerp(prev.bendL, cur.bendL, k)
     bendR = lerp(prev.bendR, cur.bendR, k)
   }
+  memo.since += Math.max(0, Math.min(0.1, tSec - memo.lastT))
+  memo.lastT = tSec
+  memo.last = { L: targetL, R: targetR, bendL, bendR }
 
   arm(1, W[LM.L_SHOULDER], targetL, bendL, LM.L_WRIST, LM.L_ELBOW, LM.L_PINKY, LM.L_INDEX, LM.L_THUMB)
   arm(-1, W[LM.R_SHOULDER], targetR, bendR, LM.R_WRIST, LM.R_ELBOW, LM.R_PINKY, LM.R_INDEX, LM.R_THUMB)
