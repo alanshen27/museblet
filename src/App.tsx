@@ -27,6 +27,7 @@ import { bindInlet, isMax, outletMessage, outletNote } from './max'
 import { DEFAULT_SCALE, MODE_GLYPH, SCALES, scaleDegree, strokesToNotes, type NoteEvent, type Stroke } from './music'
 import { chordAt, snapToScale } from './harmony'
 import type { BodyState, Phase, Strike } from './sanda'
+import { emitStrike, onStrike, type StrikeEvent } from './strikes'
 import { getTheme, setTheme, type Theme } from './instruments'
 import './App.css'
 
@@ -197,24 +198,36 @@ export default function App() {
   }, [inMax, openGate])
 
   // ------------------------------------------------------- the body --
-  const glyphFor = (s: Strike, rapid: number) => {
-    if (s.kind === 'kick') return '起势'
-    if (rapid >= 3) return '连'
-    if (s.force > 0.8) return '发'
+  const glyphFor = (e: StrikeEvent) => {
+    if (e.type === 'snap') return '定'
+    if (e.type === 'kick') return '起势'
+    if (e.rapid >= 3) return '连'
+    if (e.force > 0.8) return '发'
     return '打'
   }
 
+  // every strike — live pose, ghost, pointer or a test harness — lands here
   const landStrike = useCallback(
-    (s: Strike, rapid: number) => {
+    (e: StrikeEvent) => {
       if (!gateOpenRef.current) return
+      const s: Strike = { kind: e.type, side: e.side, x: e.x, y: e.y, dx: e.dx, dy: e.dy, force: e.force, t: e.t, drive: 0, confidence: e.confidence }
+      const rapid = e.rapid
       // pitch from height: high strikes ring high
-      const midi = scaleDegree(1 - s.y, scaleRef.current, s.kind === 'kick' ? 43 : 55, 2)
+      const midi = scaleDegree(1 - s.y, scaleRef.current, s.kind === 'kick' ? 43 : s.kind === 'snap' ? 50 : 55, 2)
       const vel = Math.round(40 + s.force * 87)
-      surface.current?.strike(s, glyphFor(s, rapid))
-      setHits((h) => h + 1)
-      formStrikesRef.current++
+      surface.current?.strike(s, glyphFor(e))
+      if (s.kind !== 'snap') {
+        setHits((h) => h + 1)
+        formStrikesRef.current++
+      }
+      if (e.source !== 'pose' && e.source !== 'ghost') {
+        // sources without a body drive the phase glyph themselves
+        setPhase('发')
+        setTimeout(() => setPhase((p) => (p === '发' ? '收' : p)), 340)
+        setTimeout(() => setPhase((p) => (p === '收' ? '势' : p)), 1200)
+      }
       if (inMax) {
-        outletMessage('strike', s.kind, midi, vel, Number(s.x.toFixed(3)), Number(s.y.toFixed(3)), rapid)
+        outletMessage('strike', s.kind, midi, vel, Number(s.x.toFixed(3)), Number(s.y.toFixed(3)), rapid, Number(e.confidence.toFixed(2)))
         // the luogu cell, spelled out as notes so simple patches still speak
         if (s.kind === 'punch') {
           outletNote('gu', 96, vel, 30) // 板 clapper
@@ -225,7 +238,7 @@ export default function App() {
               setTimeout(() => outletNote('pipa', midi + (i % 2 ? 0 : 12), Math.round(vel * (0.8 - i * 0.05)), 200), 80 + i * 60)
             }
           }
-        } else {
+        } else if (s.kind === 'kick') {
           outletNote('gu', 40, vel, 600)
           outletNote('luo', midi - 12, vel, 4000)
           outletNote('pipa', midi + 12, vel, 400)
@@ -235,13 +248,22 @@ export default function App() {
             t += gap
           }
           setTimeout(() => outletNote('luo', midi - 5, Math.round(vel * 0.7), 1500), t)
+        } else {
+          // 撕边一锣
+          let t = 0
+          for (const gap of [90, 75, 60, 50, 42, 36]) {
+            setTimeout(() => outletNote('gu', 96, Math.round(35 + s.force * 40), 30), t)
+            t += gap
+          }
+          setTimeout(() => outletNote('luo', 50, Math.round(50 + s.force * 70), 4000), t)
         }
-      } else if (s.kind !== 'snap') {
-        audioStrike(s.kind, midi, s.force, s.x, rapid)
-      }
+      } else if (s.kind === 'snap') snapPose(s.force, s.x)
+      else audioStrike(s.kind, midi, s.force, s.x, rapid)
     },
     [inMax],
   )
+
+  useEffect(() => onStrike(landStrike), [landStrike])
 
   const onBody = useCallback(
     (b: BodyState) => {
@@ -268,23 +290,6 @@ export default function App() {
       if (b.phase !== phaseRef.current) {
         phaseRef.current = b.phase
         setPhase(b.phase)
-      }
-      for (const s of b.strikes) landStrike(s, b.rapid)
-      // 亮相: the body stops dead after fast motion → 撕边一锣, a seal 定
-      if (b.snap) {
-        const nose = b.joints.nose
-        const x = nose?.x ?? 0.5
-        const y = (nose?.y ?? 0.4) + b.sw * 1.2
-        surface.current?.strike({ kind: 'snap', side: 'L', x, y, dx: 0, dy: -1, force: b.snapForce, t: now, drive: 0 }, '定')
-        if (inMax) {
-          outletMessage('strike', 'snap', 50, Math.round(40 + b.snapForce * 80), Number(x.toFixed(3)), Number(y.toFixed(3)), 0)
-          let t = 0
-          for (const gap of [90, 75, 60, 50, 42, 36]) {
-            setTimeout(() => outletNote('gu', 96, Math.round(35 + b.snapForce * 40), 30), t)
-            t += gap
-          }
-          setTimeout(() => outletNote('luo', 50, Math.round(50 + b.snapForce * 70), 4000), t)
-        } else snapPose(b.snapForce, x)
       }
       // a turning torso bows the erhu: one continuous 滑音 around the
       // centre, the bow's weight arriving with the speed of the turn
@@ -329,23 +334,30 @@ export default function App() {
         } else setAudioBody(ctl)
       }
     },
-    [bodySeen, inMax, landStrike, openGate],
+    [bodySeen, inMax, openGate],
   )
 
-  const onPointerStrike = useCallback(
-    (s: Strike) => {
-      void ensureAudio()
-      if (!gateOpenRef.current) return
-      const now = performance.now()
-      pointerPunchesRef.current = pointerPunchesRef.current.filter((t) => now - t < 1200)
-      if (s.kind === 'punch') pointerPunchesRef.current.push(now)
-      landStrike(s, pointerPunchesRef.current.length)
-      setPhase('发')
-      setTimeout(() => setPhase((p) => (p === '发' ? '收' : p)), 340)
-      setTimeout(() => setPhase((p) => (p === '收' ? '势' : p)), 1200)
-    },
-    [landStrike],
-  )
+  const onPointerStrike = useCallback((s: Strike) => {
+    void ensureAudio()
+    if (!gateOpenRef.current) return
+    const now = performance.now()
+    pointerPunchesRef.current = pointerPunchesRef.current.filter((t) => now - t < 1200)
+    if (s.kind === 'punch') pointerPunchesRef.current.push(now)
+    emitStrike({
+      type: s.kind,
+      side: s.side,
+      confidence: s.confidence,
+      force: s.force,
+      x: s.x,
+      y: s.y,
+      dx: s.dx,
+      dy: s.dy,
+      joints: null,
+      rapid: pointerPunchesRef.current.length,
+      source: 'pointer',
+      t: now,
+    })
+  }, [])
 
   // ------------------------------------------------------ brushwork --
   // the brush as ink, not as a pointer: height is pitch (宫…羽 over two

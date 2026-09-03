@@ -962,6 +962,7 @@ export default function InkSurface({
                 force: Math.min(1, Math.max(0.25, speed / 3)),
                 t: performance.now(),
                 drive: 0.3,
+                confidence: Math.min(1, 0.5 + speed / 4),
               })
               return
             }

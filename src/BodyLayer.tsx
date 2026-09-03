@@ -4,6 +4,7 @@ import type { DrawHandle, DrawPoint } from './InkSurface'
 import { PUNCH_SPEED, SandaTracker, type BodyState } from './sanda'
 import { INK } from './instruments'
 import { demoPose } from './demoPose'
+import { emitStrike } from './strikes'
 
 const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm'
 // BlazePose GHUM "full": 33 keypoints with metric world coordinates. The
@@ -181,6 +182,41 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
     const feed = (b: BodyState) => {
       surface.current?.setBody(b)
       onBodyRef.current(b)
+      const source = ghost ? 'ghost' : 'pose'
+      for (const st of b.strikes) {
+        emitStrike({
+          type: st.kind,
+          side: st.side,
+          confidence: st.confidence,
+          force: st.force,
+          x: st.x,
+          y: st.y,
+          dx: st.dx,
+          dy: st.dy,
+          joints: b.joints,
+          rapid: b.rapid,
+          source,
+          t: st.t,
+        })
+      }
+      if (b.snap) {
+        // 亮相: the body stopped dead after fast motion
+        const nose = b.joints.nose
+        emitStrike({
+          type: 'snap',
+          side: 'L',
+          confidence: Math.min(1, 0.4 + b.snapForce * 0.6),
+          force: b.snapForce,
+          x: nose?.x ?? 0.5,
+          y: (nose?.y ?? 0.4) + b.sw * 1.2,
+          dx: 0,
+          dy: -1,
+          joints: b.joints,
+          rapid: 0,
+          source,
+          t: b.t,
+        })
+      }
       brush(b)
       readout(b)
     }

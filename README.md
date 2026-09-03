@@ -222,6 +222,29 @@ Into jweb (from Max): `play`, `stop`, `clear`, `open`, `tempo <bpm>`,
 shadowed home). 七声 — 清乐 qingyue, 雅乐 yayue (变徵), 燕乐 yanyue (闰).
 Harmony stacks 4ths and 5ths, no 3rds; the centre drifts slowly.
 
+## Strike event surface (for test harnesses)
+
+Every strike — live pose, ghost performer, pointer, or a harness feeding
+fixture frames — goes through one bus, `src/strikes.ts`:
+
+```ts
+import { onStrike, emitStrike, strikeEvent } from './strikes'
+onStrike((e) => { /* e.type punch|kick|snap, e.side, e.confidence, e.force, e.x, e.y, e.joints, e.rapid, e.source */ })
+emitStrike(strikeEvent({ type: 'punch', side: 'L', confidence: 0.9, force: 0.7, source: 'harness' }))
+```
+
+The app subscribes once and does sound, ink and Max from there. In the
+built page the same surface is on `window.nocturne`: `onStrike`,
+`emitStrike`, `strikeEvent`, the temporal `SandaTracker` (feed it
+MediaPipe landmark sequences: `tracker.update(landmarks, tMs, world)` →
+`state.strikes[]` with `confidence`), and `classifyPose(landmarks)` — a
+single-frame *pose-shape* classifier for still photos (`punch | kick |
+guard | stance | none` with `side`, `confidence`, `joints`, elbow/knee
+detail), since a still carries no velocity. Both return the same
+vocabulary so one set of assertions covers fixtures and live runs.
+`strike … <confidence>` is appended to the Max message as a trailing
+argument.
+
 ## Two grounds
 
 The ink-stone (default): pale marks on a near-black warm ground, a stone

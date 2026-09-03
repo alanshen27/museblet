@@ -68,6 +68,8 @@ export interface Strike {
   t: number
   /** how much the strike came from the body (hip turn / extension), 0..1 */
   drive: number
+  /** 0..1 — margin over the thresholds, weighted by joint visibility */
+  confidence: number
 }
 
 export interface Joint {
@@ -442,6 +444,12 @@ export class SandaTracker {
       // and the arm's extension rate
       const drive = clamp(Math.abs(this.turn) * 0.6 + clamp(ext / 12, 0, 1) * 0.6, 0, 1)
       const force = clamp((hand.speed - 1.6) / 5.5 + drive * 0.15, 0.15, 1)
+      const confidence = clamp(
+        (0.45 + clamp((hand.speed - PUNCH_SPEED) / PUNCH_SPEED, -0.3, 0.4) + clamp(outward, 0, 1) * 0.15 + (snapping ? 0.1 : 0)) *
+          clamp(wrist.vis, 0.35, 1),
+        0.05,
+        1,
+      )
       const m2 = Math.hypot(hand.vx, hand.vy)
       strikes.push({
         kind: 'punch',
@@ -454,6 +462,7 @@ export class SandaTracker {
         force,
         t,
         drive,
+        confidence,
       })
       this.punchTimes.push(t)
     }
@@ -482,6 +491,11 @@ export class SandaTracker {
       this.lastStrike.pL = this.lastStrike.pR = t
       const drive = clamp(this.root * 0.5 + Math.abs(this.lean) * 0.5, 0, 1)
       const force = clamp((j.speed - 1.4) / 5 + drive * 0.1, 0.3, 1)
+      const confidence = clamp(
+        (0.45 + clamp((j.speed - KICK_SPEED) / KICK_SPEED, -0.3, 0.4) + (footKick && kneeKick ? 0.15 : 0)) * clamp(j.vis, 0.35, 1),
+        0.05,
+        1,
+      )
       const m2 = Math.hypot(j.vx, j.vy)
       strikes.push({
         kind: 'kick',
@@ -493,6 +507,7 @@ export class SandaTracker {
         force,
         t,
         drive,
+        confidence,
       })
     }
     kick('L', LM.L_ANKLE, LM.L_KNEE, LM.L_HIP, LM.L_FOOT, 'kL')
@@ -563,3 +578,94 @@ export const FIGURE: [string, string][] = [
   ['rKnee', 'rAnkle'],
   ['rAnkle', 'rFoot'],
 ]
+
+
+// ---------------------------------------------------------- stills ------
+// A single frame carries no velocity, so a photo cannot be a strike in the
+// tracker's sense. For fixtures and test harnesses this reads the *shape*
+// of a pose instead: an arm driven straight out is a punch pose, a leg
+// raised and extended a kick pose, both hands up and in a guard. Output
+// shares the strike vocabulary so the same assertions apply.
+
+export type PoseClass = 'punch' | 'kick' | 'guard' | 'stance' | 'none'
+
+export interface PoseReading {
+  type: PoseClass
+  side: Side | null
+  /** 0..1 */
+  confidence: number
+  /** screen-space joints (mirrored), for inspection */
+  joints: Record<string, Joint>
+  /** shoulder width in image fractions */
+  sw: number
+  /** elbow angles (radians) and leg extension, for debugging fixtures */
+  detail: { elbowL: number; elbowR: number; kneeL: number; kneeR: number; footLiftL: number; footLiftR: number }
+}
+
+export function classifyPose(lm: PoseLM[] | null, mirror = true): PoseReading {
+  const empty: PoseReading = {
+    type: 'none',
+    side: null,
+    confidence: 0,
+    joints: {},
+    sw: 0,
+    detail: { elbowL: 0, elbowR: 0, kneeL: 0, kneeR: 0, footLiftL: 0, footLiftR: 0 },
+  }
+  if (!lm || lm.length < N_LM) return empty
+  const sw = Math.hypot(lm[LM.L_SHOULDER].x - lm[LM.R_SHOULDER].x, lm[LM.L_SHOULDER].y - lm[LM.R_SHOULDER].y) || 0.2
+  const J = (i: number): Joint => ({
+    x: mirror ? 1 - lm[i].x : lm[i].x,
+    y: lm[i].y,
+    z: 0,
+    vx: 0,
+    vy: 0,
+    vz: 0,
+    speed: 0,
+    vis: lm[i].visibility ?? 1,
+  })
+  const joints: Record<string, Joint> = {}
+  for (const [k, i] of Object.entries(NAMES)) joints[k] = J(i)
+  const vis = (...names: string[]) => Math.min(...names.map((n) => joints[n].vis))
+
+  const elbow = (s: string, e: string, w: string) => angle(joints[s], joints[e], joints[w])
+  const elbowL = elbow('lShoulder', 'lElbow', 'lWrist')
+  const elbowR = elbow('rShoulder', 'rElbow', 'rWrist')
+  const knee = (h: string, k: string, a: string) => angle(joints[h], joints[k], joints[a])
+  const kneeL = knee('lHip', 'lKnee', 'lAnkle')
+  const kneeR = knee('rHip', 'rKnee', 'rAnkle')
+  // a lifted foot: the ankle sits well above the other ankle, in shoulder widths
+  const footLiftL = (joints.rAnkle.y - joints.lAnkle.y) / sw
+  const footLiftR = (joints.lAnkle.y - joints.rAnkle.y) / sw
+  const detail = { elbowL, elbowR, kneeL, kneeR, footLiftL, footLiftR }
+
+  const shoulderY = (joints.lShoulder.y + joints.rShoulder.y) / 2
+  const nose = joints.nose
+  const up = (w: Joint) => w.y < shoulderY + sw * 0.25 && Math.abs(w.x - nose.x) < sw * 1.3
+  // guard: both hands up by the head, elbows bent
+  if (up(joints.lWrist) && up(joints.rWrist) && elbowL < 2.3 && elbowR < 2.3 && vis('lWrist', 'rWrist') > 0.4) {
+    const c = clamp(0.5 + (2.3 - Math.max(elbowL, elbowR)) * 0.3, 0.4, 1) * vis('lWrist', 'rWrist')
+    return { type: 'guard', side: null, confidence: c, joints, sw, detail }
+  }
+  // kick: a leg lifted and extended
+  const kickScore = (lift: number, kn: number, v: number) => (lift > 0.6 ? clamp((lift - 0.6) / 1.2, 0, 0.5) + clamp((kn - 2.0) / 1.1, 0, 0.5) : 0) * v
+  const kL = kickScore(footLiftL, kneeL, vis('lAnkle', 'lKnee'))
+  const kR = kickScore(footLiftR, kneeR, vis('rAnkle', 'rKnee'))
+  // punch: an arm straight (elbow > ~145°) and driven out — the wrist far
+  // from the shoulder and not simply hanging at the hip
+  const hipY = (joints.lHip.y + joints.rHip.y) / 2
+  const reach = (s: string, w: string) => Math.hypot(joints[w].x - joints[s].x, joints[w].y - joints[s].y) / sw
+  const hanging = (w: string) => joints[w].y > hipY - sw * 0.35
+  const punchScore = (el: number, r: number, v: number, hang: boolean) =>
+    (el > 2.5 && !hang ? clamp((el - 2.5) / 0.6, 0, 0.55) + clamp((r - 1.0) / 1.2, 0, 0.45) : 0) * v
+  const pL = punchScore(elbowL, reach('lShoulder', 'lWrist'), vis('lWrist', 'lElbow'), hanging('lWrist'))
+  const pR = punchScore(elbowR, reach('rShoulder', 'rWrist'), vis('rWrist', 'rElbow'), hanging('rWrist'))
+  const best = Math.max(kL, kR, pL, pR)
+  if (best >= 0.35) {
+    if (best === kL) return { type: 'kick', side: 'L', confidence: best, joints, sw, detail }
+    if (best === kR) return { type: 'kick', side: 'R', confidence: best, joints, sw, detail }
+    if (best === pL) return { type: 'punch', side: 'L', confidence: best, joints, sw, detail }
+    return { type: 'punch', side: 'R', confidence: best, joints, sw, detail }
+  }
+  const present = vis('lShoulder', 'rShoulder', 'lHip', 'rHip') > 0.5
+  return { type: present ? 'stance' : 'none', side: null, confidence: present ? 0.5 : 0, joints, sw, detail }
+}
