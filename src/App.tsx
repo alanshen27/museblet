@@ -54,7 +54,7 @@ export default function App() {
   const [playheadX, setPlayheadX] = useState<number | null>(null)
   const [phase, setPhase] = useState<Phase>('势')
   const [meters, setMeters] = useState({ stance: 0, root: 0, breath: 0, energy: 0 })
-  const [gated, setGated] = useState(true)
+  const [gateState, setGateState] = useState<'silent' | 'breath' | 'open'>('silent')
   const [gateOpen, setGateOpen] = useState(false)
   const [gateProgress, setGateProgress] = useState(0)
   const [bodySeen, setBodySeen] = useState(false)
@@ -340,7 +340,7 @@ export default function App() {
           seize: b.seize,
         }
         setMeters({ stance: b.stance, root: b.root, breath: b.stillness, energy: b.energy })
-        setGated(b.gated && b.stillness < 0.5)
+        setGateState(b.gated ? (b.stillness >= 0.5 ? 'breath' : 'silent') : 'open')
         if (inMax) {
           for (const [k, v] of Object.entries(ctl)) {
             const q = Math.round(v * 100) / 100
@@ -601,8 +601,8 @@ export default function App() {
           <span className="mode-name">
             {scale} · {tempo}
           </span>
-          <span className={`gate-ind ${gated ? 'silent' : 'open'}`} title="expression gate">
-            {gated ? 'silent' : 'open'}
+          <span className={`gate-ind ${gateState}`} title="expression gate">
+            {gateState}
           </span>
           <div className="meters" aria-hidden>
             {(['stance', 'root', 'breath', 'energy'] as const).map((k) => (

@@ -947,8 +947,9 @@ export default function InkSurface({
               const dt = Math.max(8, st.times[i] - st.times[i - 2]) / 1000
               peak = Math.max(peak, Math.hypot(p1.x - p0.x, p1.y - p0.y) / dt)
             }
-            // …or simply a large displacement inside a short press
-            if ((d > 0.04 && (avg > 0.45 || peak > 1.1)) || (d > 0.16 && dur < 700)) {
+            // …or simply a large displacement inside a short press, or a
+            // single-move flick (two samples: a brush never looks like that)
+            if ((d > 0.04 && (avg > 0.45 || peak > 1.1)) || (d > 0.16 && dur < 900) || (st.path.length <= 3 && d > 0.12)) {
               strokeCancel(e.pointerId)
               const speed = Math.max(avg, peak * 0.6)
               onPointerStrikeRef.current?.({

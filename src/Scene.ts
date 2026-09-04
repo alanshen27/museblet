@@ -452,7 +452,8 @@ void main() {
   vec3 col = room(uv, fogUv, near, grain);
 
   // ---- the shadow: one filled organic shape from the joints -----------
-  if (uFigOn == 1) {
+  // only pixels the low-res field puts near the figure evaluate the full SDF
+  if (uFigOn == 1 && dBody < 0.06) {
     vec2 fp = vec2(uv.x * aspect, uv.y);
     float dF = sdFigure(fp);
     float px = 0.0018;

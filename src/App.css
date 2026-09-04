@@ -636,6 +636,10 @@
   vertical-align: middle;
   transition: background 0.4s ease;
 }
+.gate-ind.breath {
+  color: var(--paper);
+  opacity: 0.6;
+}
 .gate-ind.open {
   color: var(--paper);
 }
