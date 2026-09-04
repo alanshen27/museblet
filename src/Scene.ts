@@ -458,10 +458,6 @@ void main() {
 
   vec3 col = room(uv, fogUv, near, grain);
 
-  // the joint field is the mist's body mask only — never drawn. The visible
-  // performer is the premade rig on the layer above. Here: a contact shadow.
-  if (uFigOn == 1) col *= 1.0 - 0.18 * exp(-max(dBody, 0.0) * 90.0);
-
   float vig = 1.0 - smoothstep(0.3, 0.95, length(q * vec2(1.0, 1.25))) * mix(0.6, 0.12, paper);
   col *= vig;
   col += flash * mix(vec3(0.92, 0.88, 0.8), vec3(-0.5, -0.5, -0.5), paper);

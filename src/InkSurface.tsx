@@ -108,6 +108,9 @@ interface GhostFrame {
   sw: number
 }
 
+// the invisible joint field that lets the mist part around the body — opt-in
+const BODY_FIELD = new URLSearchParams(window.location.search).has('bodyfield')
+
 // marks dry, hold, then return to 留白
 const HOLD_MS = 24000
 const FADE_MS = 6000
@@ -337,7 +340,10 @@ export default function InkSurface({
     const F = fluid.current
     if (F?.ok) {
       const b = body.current
-      F.setBody(b?.present && b.all.length === 33 ? b.all : null, b?.sw ?? 0.2)
+      // the joint body field (fluid obstacle / fog bending) is off by default:
+      // it is built from capsules and its shape can read as a second figure.
+      // `?bodyfield` turns it back on for the mist to part around the body.
+      F.setBody(BODY_FIELD && b?.present && b.all.length === 33 ? b.all : null, b?.sw ?? 0.2)
       if (b?.present) {
         const stir = (name: string, j: Joint, amount: number, radius: number) => {
           if (j.vis < 0.4) return
