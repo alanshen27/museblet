@@ -64,15 +64,20 @@ runs a rehearsal at a third of the length. Max receives
 
 ### The figure
 
-The performer is a **shadow** — one filled black shape, like a paper
-cutting or a stone rubbing — built as a 2D signed-distance field from the
-33 landmarks alone (`Scene.ts`, `FIGURE_GLSL`): a rounded trunk spanning
-shoulders and hips, deltoids, a neck, an elliptical head, tapered limb
-capsules and closed fists, all joined by a smooth union so nothing reads
-as a ball joint, a pinched waist or a sausage limb. No mesh, no rig, no
-retargeting: the joints are the body. The same field is what the mist
-parts around. Its edge carries a whisper of light at rest and flares
-cinnabar for the beat of a strike.
+The performer is a **shadow of a premade human**: Mixamo's Michelle from
+the three.js examples (`public/models/performer_michelle.glb`; `?body=rpm`
+for the examples' Ready Player Me avatar). `src/Character.ts` retargets
+**rotations only** — each limb bone is aimed at the joint its child bone
+sits on, the torso takes a full orientation from the hip and shoulder
+lines, the head yaws and pitches with the nose, the fingers are curled
+into fists; the hips take a damped position and the whole figure is fitted
+with one slowly smoothed uniform scale. **No bone is ever scaled**: the
+body's proportions are the asset's bind pose. The mesh is drawn flat black
+as a coverage mask with a soft edge (a ½ % close heals seams between the
+asset's separate meshes; nothing reshapes the body); the edge carries a
+whisper of light at rest and flares cinnabar for the beat of a strike. A
+separate low-resolution joint field, never drawn, is what the mist parts
+around.
 
 ### The room
 

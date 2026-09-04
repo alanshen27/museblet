@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import type { Stroke } from './music'
 import { getInstrument, getTheme, INK, type Instrument } from './instruments'
 import { Scene, type Mood } from './Scene'
+import { Character } from './Character'
 import { FIGURE, type BodyState, type Joint, type Strike } from './sanda'
 
 export interface DrawPoint {
@@ -106,6 +107,9 @@ interface GhostFrame {
   joints: Record<string, Joint>
   sw: number
 }
+
+// the invisible joint field that lets the mist part around the body — opt-in
+const BODY_FIELD = new URLSearchParams(window.location.search).has('bodyfield')
 
 // marks dry, hold, then return to 留白
 const HOLD_MS = 24000
@@ -213,8 +217,10 @@ export default function InkSurface({
   handleRef,
 }: Props) {
   const glRef = useRef<HTMLCanvasElement>(null)
+  const charRef = useRef<HTMLCanvasElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const fluid = useRef<Scene | null>(null)
+  const character = useRef<Character | null>(null)
   const activeStrokes = useRef(new Map<number, Stroke>())
   const pointerState = useRef(
     new Map<number, { last: { x: number; y: number; t: number } | null; weight: number; speed: number; born: number; path: DrawPoint[]; times: number[] }>(),
@@ -334,7 +340,10 @@ export default function InkSurface({
     const F = fluid.current
     if (F?.ok) {
       const b = body.current
-      F.setBody(b?.present && b.all.length === 33 ? b.all : null, b?.sw ?? 0.2)
+      // the joint body field (fluid obstacle / fog bending) is off by default:
+      // it is built from capsules and its shape can read as a second figure.
+      // `?bodyfield` turns it back on for the mist to part around the body.
+      F.setBody(BODY_FIELD && b?.present && b.all.length === 33 ? b.all : null, b?.sw ?? 0.2)
       if (b?.present) {
         const stir = (name: string, j: Joint, amount: number, radius: number) => {
           if (j.vis < 0.4) return
@@ -375,6 +384,11 @@ export default function InkSurface({
       F.setFigure(b?.present ? b.energy : 0, b?.present ? b.sinceStrike : Infinity)
       F.step(dt)
       F.render()
+    }
+    // the performer: the premade human rig, posed by the joints, drawn black
+    if (character.current) {
+      character.current.update(body.current, w / h, dt)
+      character.current.render()
     }
 
     g.setTransform(1, 0, 0, 1, 0, 0)
@@ -776,8 +790,10 @@ export default function InkSurface({
   useEffect(() => {
     const canvas = canvasRef.current
     const glc = glRef.current
-    if (!canvas || !glc) return
+    const cc = charRef.current
+    if (!canvas || !glc || !cc) return
     if (!fluid.current) fluid.current = new Scene(glc)
+    if (!character.current) character.current = new Character(cc)
     const resize = () => {
       const rect = canvas.getBoundingClientRect()
       const dpr = devicePixelRatio
@@ -787,6 +803,7 @@ export default function InkSurface({
       glc.width = Math.round(rect.width * Math.min(dpr, 1.5))
       glc.height = Math.round(rect.height * Math.min(dpr, 1.5))
       fluid.current?.resize()
+      character.current?.resize(Math.round(rect.width * Math.min(dpr, 2)), Math.round(rect.height * Math.min(dpr, 2)))
     }
     resize()
     const observer = new ResizeObserver(resize)
@@ -868,7 +885,10 @@ export default function InkSurface({
         fluid.current?.setMood({ gate: open ? 1 : 0 })
       },
       setMood: (m) => fluid.current?.setMood(m),
-      setTheme: (paper) => fluid.current?.setTheme(paper),
+      setTheme: (paper) => {
+        fluid.current?.setTheme(paper)
+        character.current?.setTheme(paper)
+      },
     }
     return () => {
       handleRef.current = null
@@ -910,6 +930,7 @@ export default function InkSurface({
   return (
     <div className="ink-surface">
       <canvas ref={glRef} className="ink-fluid" />
+      <canvas ref={charRef} className="ink-character" />
       <canvas
         ref={canvasRef}
         className="ink-marks"
