@@ -62,21 +62,17 @@ room rests; a strike or a long stillness opens a new piece. `?form=brisk`
 runs a rehearsal at a third of the length. Max receives
 `section <glyph> <index> <resting>`.
 
-### The character
+### The figure
 
-`src/Character.ts` loads a premade rig — the three.js examples' Mixamo
-**X Bot** (`public/models/xbot.glb`, standard `mixamorig` skeleton,
-T-pose rest, neutral athletic proportions) — and retargets **rotations
-only**: each limb bone is aimed at the joint its child bone sits on; the
-torso takes a full orientation from the hip and shoulder lines; the head
-yaws and pitches with the nose. The hips take a damped position and the
-whole figure is fitted to the frame with one slowly smoothed uniform
-scale; no bone is ever scaled, so proportions are the asset's. It is
-rendered unlit as an **energy silhouette**: a near-black fill, a thin chi
-rim that brightens with motion and turns cinnabar for a beat when a strike
-lands, slow inner filaments, and an additive aura hull. The rig's
-panel-line "joints" mesh is never drawn. Any GLB with `mixamorig*` bones
-drops in at `MODEL_URL`.
+The performer is a **shadow** — one filled black shape, like a paper
+cutting or a stone rubbing — built as a 2D signed-distance field from the
+33 landmarks alone (`Scene.ts`, `FIGURE_GLSL`): a rounded trunk spanning
+shoulders and hips, deltoids, a neck, an elliptical head, tapered limb
+capsules and closed fists, all joined by a smooth union so nothing reads
+as a ball joint, a pinched waist or a sausage limb. No mesh, no rig, no
+retargeting: the joints are the body. The same field is what the mist
+parts around. Its edge carries a whisper of light at rest and flares
+cinnabar for the beat of a strike.
 
 ### The room
 
@@ -117,15 +113,21 @@ opens the gate. `D` shows the tracking view, `T` turns the sheet over
 surface 散板 — unquantised, x = time, y = pitch, length = duration — `R`
 clears. Sound starts on the first click or key (browser autoplay rules).
 
-**Gating.** Small movements do nothing. A strike must come out of rest
-(the limb slower than 1.1 shoulder-widths/s since its last strike) and
-exceed 3.2 sw/s for a fist (or 2.6 with the elbow snapping straight) or
-2.8 sw/s for a foot/knee, with 320 / 600 ms refractories; brushing needs a
-hand above the hips moving faster than 0.5 sw/s and plucks only every 0.34
-(qin) / 0.11 (pipa) of the screen travelled; the dizi opens only past 45 %
-stillness; the erhu wants a real turn sustained for 400 ms; the pipa wheel
-needs three fast fists; 亮相 needs a real peak. Continuous `ctl` streams
-stay subtle. Press **H** in the app for the legend of moves.
+**Gating.** Small movements do nothing. A strike is a **peak and a
+release**: out of rest (slower than 1.1 shoulder-widths/s since the last
+strike) the limb must exceed 3.2 sw/s for a fist (2.6 with the elbow
+snapping straight) or 2.8 sw/s for a foot/knee, then fall back below 55 %
+of its peak within 600 ms, having travelled at least 0.45 / 0.4 sw from
+where it rested (depth included), with the whole body above the
+**expression floor** (energy 0.12); refractories 320 / 600 ms. Brushing
+needs a hand above the hips faster than 0.7 sw/s for 220 ms *and* going
+somewhere (≥ 0.12 sw), and plucks only every 0.34 (qin) / 0.11 (pipa) of
+the screen travelled; the dizi opens only past 50 % stillness; the erhu
+wants a turn above 0.6 sustained 400 ms with the body over the floor; the
+pipa wheel needs three fast fists; 亮相 needs a real peak. Small
+displacements are smoothed hard so camera jitter never reads as speed. The
+footer shows **silent / open** for the expression gate; `D` shows it in the
+readout. Continuous `ctl` streams stay subtle. Press **H** for the legend.
 
 **Anti-defaults, by design:** no drop, no sidechain, no kick/snare groove,
 no pentatonic arpeggiator; the luogu punctuates action (冲头 / 撕边一锣 /
@@ -271,15 +273,14 @@ product.
 - `src/Scene.ts` — the room (see above): fluid, body field, shanshui,
   ink-wash tone curve, paper grain, a spring-loaded screen displacement on
   strikes (weight, not shake).
-- `src/Character.ts` — the energy silhouette on the premade rig.
 - `src/InkSurface.tsx` — the 2D ink layer: brush marks as variable-width
   ribbons that bleed while wet and dry with 飞白 hairlines where the hand
   moved fast; limb-path ribbons (残影) on fast motion; cinnabar seals with
   hand-cut edges pressed on impact; hairline cracks, ring pulses, splatter.
 
 Requires camera permission and network access (the pose model loads
-from a CDN); the character rig ships in `public/models/`. Without WebGL2
-float textures the room is skipped and the 2D ink still runs.
+from a CDN). Without WebGL2 float textures the room and the shadow are
+skipped and the 2D ink still runs.
 
 ## Run
 

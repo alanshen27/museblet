@@ -54,6 +54,7 @@ export default function App() {
   const [playheadX, setPlayheadX] = useState<number | null>(null)
   const [phase, setPhase] = useState<Phase>('势')
   const [meters, setMeters] = useState({ stance: 0, root: 0, breath: 0, energy: 0 })
+  const [gated, setGated] = useState(true)
   const [gateOpen, setGateOpen] = useState(false)
   const [gateProgress, setGateProgress] = useState(0)
   const [bodySeen, setBodySeen] = useState(false)
@@ -304,8 +305,9 @@ export default function App() {
       }
       // a turning torso bows the erhu: one continuous 滑音 around the
       // centre, the bow's weight arriving with the speed of the turn
-      // the erhu wants a real, sustained turn: above the bar for 400 ms
-      if (b.turnRate > 0.55 && b.sinceStrike > 400) {
+      // the erhu wants a real, sustained turn of a moving body: above the
+      // bar for 400 ms and over the expression floor
+      if (b.turnRate > 0.6 && b.energy > 0.25 && b.sinceStrike > 400) {
         if (!erhuArmRef.current) erhuArmRef.current = now
       } else erhuArmRef.current = 0
       const turning = erhuArmRef.current > 0 && now - erhuArmRef.current > 400
@@ -338,6 +340,7 @@ export default function App() {
           seize: b.seize,
         }
         setMeters({ stance: b.stance, root: b.root, breath: b.stillness, energy: b.energy })
+        setGated(b.gated && b.stillness < 0.5)
         if (inMax) {
           for (const [k, v] of Object.entries(ctl)) {
             const q = Math.round(v * 100) / 100
@@ -402,7 +405,7 @@ export default function App() {
       const dry = g.instr === 'pipa' ? p.speed > 0.9 || p.pressure < 0.25 : p.speed > 1.4 || p.pressure < 0.18
       g.instr = dry ? 'pipa' : 'qin'
       // dead zone: a slow hand rings on and lays down nothing new
-      if (p.speed < 0.3) return
+      if (p.speed < 0.4) return
       g.travel += dist
       // onsets are sparse: a good stretch of travel per pluck
       const threshold = g.instr === 'pipa' ? 0.11 : 0.34
@@ -597,6 +600,9 @@ export default function App() {
           <span className="mode-glyph">{MODE_GLYPH[scale] ?? scale.slice(0, 1)}</span>
           <span className="mode-name">
             {scale} · {tempo}
+          </span>
+          <span className={`gate-ind ${gated ? 'silent' : 'open'}`} title="expression gate">
+            {gated ? 'silent' : 'open'}
           </span>
           <div className="meters" aria-hidden>
             {(['stance', 'root', 'breath', 'energy'] as const).map((k) => (
