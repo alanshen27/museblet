@@ -21,9 +21,11 @@ const MODEL_URLS: Record<string, string> = {
 export const LEFT_HAND = 2000
 export const RIGHT_HAND = 2001
 
-// a hand brushes when it moves slower than this (fraction of a punch)
-const BRUSH_MAX = PUNCH_SPEED * 0.72
-const BRUSH_MIN = 0.22
+// a hand brushes when it moves slower than this (fraction of a punch)…
+const BRUSH_MAX = PUNCH_SPEED * 0.7
+// …and faster than this: below it is a dead zone — small drift, tremor and
+// tracking noise lay down nothing
+const BRUSH_MIN = 0.5
 // … and lets go after resting this long
 const REST_MS = 420
 

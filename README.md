@@ -117,6 +117,16 @@ opens the gate. `D` shows the tracking view, `T` turns the sheet over
 surface 散板 — unquantised, x = time, y = pitch, length = duration — `R`
 clears. Sound starts on the first click or key (browser autoplay rules).
 
+**Gating.** Small movements do nothing. A strike must come out of rest
+(the limb slower than 1.1 shoulder-widths/s since its last strike) and
+exceed 3.2 sw/s for a fist (or 2.6 with the elbow snapping straight) or
+2.8 sw/s for a foot/knee, with 320 / 600 ms refractories; brushing needs a
+hand above the hips moving faster than 0.5 sw/s and plucks only every 0.34
+(qin) / 0.11 (pipa) of the screen travelled; the dizi opens only past 45 %
+stillness; the erhu wants a real turn sustained for 400 ms; the pipa wheel
+needs three fast fists; 亮相 needs a real peak. Continuous `ctl` streams
+stay subtle. Press **H** in the app for the legend of moves.
+
 **Anti-defaults, by design:** no drop, no sidechain, no kick/snare groove,
 no pentatonic arpeggiator; the luogu punctuates action (冲头 / 撕边一锣 /
 八答仓) and the loop is free meter.

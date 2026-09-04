@@ -69,7 +69,18 @@ export default function App() {
   const lastBodyRef = useRef<BodyState | null>(null)
   const erhuOnRef = useRef(false)
   const erhuMaxRef = useRef(0)
+  const erhuArmRef = useRef(0)
   const [theme, setThemeState] = useState<Theme>(getTheme())
+  const [help, setHelp] = useState(false)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'h' || e.key === 'H' || e.key === '?') setHelp((v) => !v)
+      if (e.key === 'Escape') setHelp(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // the two grounds: the ink-stone (default) and xuan paper. `?theme=xuan`,
   // or T to turn the sheet over
@@ -293,7 +304,11 @@ export default function App() {
       }
       // a turning torso bows the erhu: one continuous 滑音 around the
       // centre, the bow's weight arriving with the speed of the turn
-      const turning = b.turnRate > 0.3 && b.sinceStrike > 400
+      // the erhu wants a real, sustained turn: above the bar for 400 ms
+      if (b.turnRate > 0.55 && b.sinceStrike > 400) {
+        if (!erhuArmRef.current) erhuArmRef.current = now
+      } else erhuArmRef.current = 0
+      const turning = erhuArmRef.current > 0 && now - erhuArmRef.current > 400
       if (turning) {
         const centre = chordAt(scaleRef.current, centreIndex(now), 60)[0]
         const midi = snapToScale(Math.round(centre + b.lean * 7 + (1 - b.root) * 5), scaleRef.current)
@@ -384,11 +399,13 @@ export default function App() {
       const level = Math.min(1, Math.max(0.05, 0.35 + p.pressure * 0.65))
       // dry and fast reads as pipa; slow and wet as qin — hysteresis so a
       // hand does not flicker between them
-      const dry = g.instr === 'pipa' ? p.speed > 0.55 || p.pressure < 0.3 : p.speed > 0.95 || p.pressure < 0.22
+      const dry = g.instr === 'pipa' ? p.speed > 0.9 || p.pressure < 0.25 : p.speed > 1.4 || p.pressure < 0.18
       g.instr = dry ? 'pipa' : 'qin'
-      if (p.speed < 0.12) return // stillness: the mark rings, nothing new
+      // dead zone: a slow hand rings on and lays down nothing new
+      if (p.speed < 0.3) return
       g.travel += dist
-      const threshold = g.instr === 'pipa' ? 0.055 : 0.24
+      // onsets are sparse: a good stretch of travel per pluck
+      const threshold = g.instr === 'pipa' ? 0.11 : 0.34
       const now = performance.now()
       if (g.travel >= threshold) {
         g.travel = 0
@@ -591,12 +608,54 @@ export default function App() {
         </div>
         <div className="hints">
           <span>{hits} {hits === 1 ? 'strike' : 'strikes'}</span>
+          <span>H {help ? 'close' : 'help'}</span>
           <span>D view</span>
           <span>T {theme === 'ink' ? 'paper' : 'stone'}</span>
           <span>P {playing ? 'stop' : 'loop'}</span>
           <span>R clear</span>
         </div>
       </footer>
+
+      {help && (
+        <section className="help" onClick={() => setHelp(false)}>
+          <div className="help-card" onClick={(e) => e.stopPropagation()}>
+            <h3>
+              <span className="cjk">拓</span> what each move does
+            </h3>
+            <p className="help-note">Small movements do nothing. Sound comes from stillness, from a raised slow hand, and from a real strike.</p>
+            <dl>
+              <dt>stand still</dt>
+              <dd>breath — the dizi opens on your out-breath at the tonal centre</dd>
+              <dt>slow hand above the hips</dt>
+              <dd>the qin: one pluck per stretch of travel, sliding between (left hand low, right hand high)</dd>
+              <dt>faster, lighter hand</dt>
+              <dd>the pipa plucks as it goes</dd>
+              <dt>hand too slow</dt>
+              <dd>silence — the string rings on</dd>
+              <dt>close a loop</dt>
+              <dd>泛音 — the harmonics of the pitches you passed through</dd>
+              <dt>fast fist (out of rest)</dt>
+              <dd>八答仓 — clapper, drum, gong, then space; three fast fists turn the pipa wheel (轮指)</dd>
+              <dt>kick</dt>
+              <dd>drum and great gong, a rushing clapper roll; the curtain tears</dd>
+              <dt>stop dead after fast motion</dt>
+              <dd>撕边一锣 — one gong, then nothing</dd>
+              <dt>turn the torso, and keep turning</dt>
+              <dd>the erhu: one continuous sliding tone</dd>
+              <dt>hands together at the chest</dt>
+              <dd>the strings are damped, the pitch held</dd>
+              <dt>stance width · crouch · guard up</dt>
+              <dd>stereo width · depth of the hall · the room darkens (quiet, continuous)</dd>
+            </dl>
+            <p className="help-keys">
+              <b>H</b> help · <b>D</b> tracking view · <b>T</b> paper / stone · <b>P</b> loop the marks · <b>R</b> clear · <b>Enter</b> open the gate
+            </p>
+            <p className="help-form">
+              A session is a piece in four parts — 起 opening · 承 carrying · 转 turning · 合 closing — shown at the top. The opening holds strikes back; the turn lets everything through.
+            </p>
+          </div>
+        </section>
+      )}
 
       {!gateOpen && (
         <section className="gate" style={{ '--p': gateProgress } as React.CSSProperties}>
@@ -610,9 +669,13 @@ export default function App() {
               ? 'stand. let the arms hang. hold still for a breath.'
               : 'step back until the whole body is in frame — or hold the pointer.'}
           </p>
-          <p className="gate-legend">
-            slow hands brush the qin · a fast fist lands 八答仓 · a kick tears the curtain
-          </p>
+          <ul className="gate-legend">
+            <li><b>stand still</b> breath — the dizi</li>
+            <li><b>slow hand, raised</b> brush — the qin (left low, right high)</li>
+            <li><b>fast fist</b> 八答仓 — clapper, drum, gong</li>
+            <li><b>kick</b> drum and great gong</li>
+            <li><b>H</b> for the whole legend</li>
+          </ul>
         </section>
       )}
     </div>
