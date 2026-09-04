@@ -3,15 +3,17 @@ import InkSurface, { type DrawHandle, type DrawPoint } from './InkSurface'
 import BodyLayer, { LEFT_HAND, RIGHT_HAND } from './BodyLayer'
 import {
   armAudio,
+  bow,
   breathPitch,
   brushEnd,
   brushOnset,
   brushTo,
   ensureAudio,
   erhuEnd,
-  erhuTo,
+  feedRoll,
   flageolets,
   snapPose,
+  windup,
   gateComplete,
   isAwakened,
   playNote,
@@ -25,7 +27,7 @@ import {
 import { PerformanceForm, SECTION_INFO, SECTIONS, type FormState } from './performance'
 import { bindInlet, isMax, outletMessage, outletNote } from './max'
 import { DEFAULT_SCALE, MODE_GLYPH, SCALES, scaleDegree, strokesToNotes, type NoteEvent, type Stroke } from './music'
-import { chordAt, snapToScale } from './harmony'
+import { chordAt } from './harmony'
 import type { BodyState, Phase, Strike } from './sanda'
 import { emitStrike, onStrike, type StrikeEvent } from './strikes'
 import { getTheme, setTheme, type Theme } from './instruments'
@@ -68,9 +70,18 @@ export default function App() {
   )
   const formStrikesRef = useRef(0)
   const lastBodyRef = useRef<BodyState | null>(null)
-  const erhuOnRef = useRef(false)
+  const lastStrikeRef = useRef(-Infinity)
+  const rollOnRef = useRef(false)
   const erhuMaxRef = useRef(0)
-  const erhuArmRef = useRef(0)
+  // the phrase pulse: a slow breath of 2.4 s, its eighths (300 ms) the only
+  // places a brush onset may fall — 散板 in feel, but never a random spray
+  const PULSE_MS = 300
+  const nextPulseDelay = () => {
+    const now = performance.now()
+    const ph = (now - gateOpenAtRef.current) % PULSE_MS
+    return (PULSE_MS - ph) / 1000
+  }
+  const gateOpenAtRef = useRef(0)
   const [theme, setThemeState] = useState<Theme>(getTheme())
   const [help, setHelp] = useState(false)
 
@@ -140,6 +151,7 @@ export default function App() {
     setGateOpen(true)
     setGateProgress(1)
     surface.current?.setGate(1, true)
+    gateOpenAtRef.current = performance.now()
     formRef.current.start(performance.now())
     if (inMax) outletMessage('gate', 'open')
     else gateComplete()
@@ -211,9 +223,9 @@ export default function App() {
 
   // ------------------------------------------------------- the body --
   const glyphFor = (e: StrikeEvent) => {
-    if (e.type === 'snap') return '定'
+    if (e.type === 'snap') return '亮相'
     if (e.type === 'kick') return '起势'
-    if (e.rapid >= 3) return '连'
+    if (e.rapid >= 3) return '连击'
     if (e.force > 0.8) return '发'
     return '打'
   }
@@ -224,6 +236,7 @@ export default function App() {
       if (!gateOpenRef.current) return
       const s: Strike = { kind: e.type, side: e.side, x: e.x, y: e.y, dx: e.dx, dy: e.dy, force: e.force, t: e.t, drive: 0, confidence: e.confidence }
       const rapid = e.rapid
+      lastStrikeRef.current = e.t
       // pitch from height: high strikes ring high
       const midi = scaleDegree(1 - s.y, scaleRef.current, s.kind === 'kick' ? 43 : s.kind === 'snap' ? 50 : 55, 2)
       const vel = Math.round(40 + s.force * 87)
@@ -303,29 +316,23 @@ export default function App() {
         phaseRef.current = b.phase
         setPhase(b.phase)
       }
-      // a turning torso bows the erhu: one continuous 滑音 around the
-      // centre, the bow's weight arriving with the speed of the turn
-      // the erhu wants a real, sustained turn of a moving body: above the
-      // bar for 400 ms and over the expression floor
-      if (b.turnRate > 0.6 && b.energy > 0.25 && b.sinceStrike > 400) {
-        if (!erhuArmRef.current) erhuArmRef.current = now
-      } else erhuArmRef.current = 0
-      const turning = erhuArmRef.current > 0 && now - erhuArmRef.current > 400
-      if (turning) {
-        const centre = chordAt(scaleRef.current, centreIndex(now), 60)[0]
-        const midi = snapToScale(Math.round(centre + b.lean * 7 + (1 - b.root) * 5), scaleRef.current)
-        if (inMax) {
-          if (now - erhuMaxRef.current > 350) {
-            erhuMaxRef.current = now
-            outletNote('erhu', midi, Math.round(30 + b.turnRate * 80), 500)
-          }
-        } else erhuTo(midi, Math.min(1, b.turnRate * 1.4), 0.5 + b.lean * 0.3, 250)
-        erhuOnRef.current = true
-      } else if (erhuOnRef.current) {
-        erhuOnRef.current = false
-        if (!inMax) erhuEnd()
+      // 蓄: a hand drawn back is the breath before the blow
+      if (b.windup && !b.gated && now - lastStrikeRef.current > 700) {
+        const w = b.windup === 'L' ? b.joints.lWrist : b.joints.rWrist
+        if (inMax) outletMessage('windup', b.windup)
+        else windup(w?.x ?? 0.5)
       }
-
+      // a turning torso rolls the drum: density from the speed of the turn,
+      // only with the body clearly in motion
+      if (b.turnRate > 0.6 && b.energy > 0.3 && b.sinceStrike > 500) {
+        rollOnRef.current = true
+        if (inMax) {
+          if (now - erhuMaxRef.current > 220) {
+            erhuMaxRef.current = now
+            outletNote('gu', 45, Math.round(30 + b.turnRate * 70), 120)
+          }
+        } else feedRoll(Math.min(1, (b.turnRate - 0.6) * 2.5), 0.5 + b.lean * 0.3)
+      } else rollOnRef.current = false
       // continuous control stream, ~20 Hz
       if (now - lastCtlSentRef.current > 50) {
         lastCtlSentRef.current = now
@@ -380,53 +387,63 @@ export default function App() {
   }, [openGate])
 
   // ------------------------------------------------------ brushwork --
-  // the brush as ink, not as a pointer: height is pitch (宫…羽 over two
-  // octaves in the hand's register), the integral of speed decides when
-  // an onset falls, and below a threshold of speed there is silence — the
-  // string rings on. A slow, wet hand is the qin, sliding between onsets
-  // (走手音); a fast, dry hand is the pipa, plucking as it goes.
-  const gest = useRef(new Map<number, { travel: number; last: DrawPoint | null; instr: 'qin' | 'pipa'; lastMaxT: number }>())
+  // one gesture, one event. The left hand (and the pointer) is the qin: a
+  // single pluck when the gesture commits — placed on the next eighth of
+  // the phrase pulse — then the string slides (走手音) until the hand stops
+  // or reverses sharply, which is a new gesture and a new pluck. The right
+  // hand is the erhu: a bow whose pressure is the hand's speed and whose
+  // pitch is its height — sound only while it moves. Nothing plucks by
+  // distance travelled; nothing sounds for 700 ms after a strike (收).
+  const gest = useRef(new Map<number, { last: DrawPoint | null; vx: number; vy: number; lastPluck: number; started: boolean }>())
   const onDrawPoint = useCallback(
     (pointerId: number, _instr: string, p: DrawPoint) => {
       if (!gateOpenRef.current) return
       if (!inMax && !isAwakened()) return
+      const now = performance.now()
+      if (now - lastStrikeRef.current < 700) return // 收: the blow is still ringing
       const slot = slotOf(pointerId)
       let g = gest.current.get(pointerId)
       if (!g) {
-        g = { travel: 0, last: null, instr: 'qin', lastMaxT: 0 }
+        g = { last: null, vx: 0, vy: 0, lastPluck: 0, started: false }
         gest.current.set(pointerId, g)
       }
-      const dist = g.last ? Math.hypot(p.x - g.last.x, p.y - g.last.y) : 0
-      g.last = p
       const midi = scaleDegree(1 - p.y, scaleRef.current, LOW[slot], 2)
       const level = Math.min(1, Math.max(0.05, 0.35 + p.pressure * 0.65))
-      // dry and fast reads as pipa; slow and wet as qin — hysteresis so a
-      // hand does not flicker between them
-      const dry = g.instr === 'pipa' ? p.speed > 0.9 || p.pressure < 0.25 : p.speed > 1.4 || p.pressure < 0.18
-      g.instr = dry ? 'pipa' : 'qin'
-      // dead zone: a slow hand rings on and lays down nothing new
-      if (p.speed < 0.4) return
-      g.travel += dist
-      // onsets are sparse: a good stretch of travel per pluck
-      const threshold = g.instr === 'pipa' ? 0.11 : 0.34
-      const now = performance.now()
-      if (g.travel >= threshold) {
-        g.travel = 0
-        const force = Math.min(1, 0.35 + p.speed * 0.35 + p.pressure * 0.3)
+      // the right hand bows
+      if (slot === 1) {
         if (inMax) {
-          g.lastMaxT = now
-          emit({ timeMs: 0, pen: g.instr, midi, velocity: Math.round(30 + force * 90), durationMs: g.instr === 'pipa' ? 400 : 1600 }, p.x)
-        } else brushOnset(slot, g.instr, midi, force, p.x)
-        surface.current?.notePulse(pointerId, 0.4 + force * 0.5)
-      } else if (g.instr === 'qin') {
-        // between onsets the qin slides
-        if (inMax) {
-          if (now - g.lastMaxT > 700) {
-            g.lastMaxT = now
-            emit({ timeMs: 0, pen: 'qin', midi, velocity: Math.round(20 + level * 40), durationMs: 900 }, p.x)
+          if (now - g.lastPluck > 350) {
+            g.lastPluck = now
+            emit({ timeMs: 0, pen: 'erhu', midi, velocity: Math.round(30 + Math.min(1, p.speed / 2.5) * 80), durationMs: 500 }, p.x)
           }
-        } else brushTo(slot, 'qin', midi, level, p.x, p.speed)
+        } else bow(midi, p.speed, p.x)
+        g.last = p
+        return
       }
+      // the left hand / pointer plucks once per gesture
+      let reversal = false
+      if (g.last) {
+        const dx = p.x - g.last.x
+        const dy = p.y - g.last.y
+        const d = Math.hypot(dx, dy)
+        if (d > 1e-4) {
+          const nx = dx / d
+          const ny = dy / d
+          reversal = g.started && nx * g.vx + ny * g.vy < -0.4 && p.speed > 0.9
+          g.vx = g.vx * 0.5 + nx * 0.5
+          g.vy = g.vy * 0.5 + ny * 0.5
+        }
+      }
+      g.last = p
+      const commit = !g.started || (reversal && now - g.lastPluck > 450)
+      if (commit) {
+        g.started = true
+        g.lastPluck = now
+        const force = Math.min(1, 0.35 + p.speed * 0.25 + p.pressure * 0.35)
+        if (inMax) emit({ timeMs: 0, pen: 'qin', midi, velocity: Math.round(30 + force * 90), durationMs: 1600 }, p.x)
+        else brushOnset(slot, 'qin', midi, force, p.x, nextPulseDelay())
+        surface.current?.notePulse(pointerId, 0.4 + force * 0.5)
+      } else if (!inMax) brushTo(slot, 'qin', midi, level, p.x, p.speed)
     },
     [emit, inMax],
   )
@@ -434,7 +451,8 @@ export default function App() {
   const onDrawEnd = useCallback(
     (pointerId: number, path?: DrawPoint[]) => {
       const slot = slotOf(pointerId)
-      brushEnd(slot)
+      if (slot === 1) erhuEnd()
+      else brushEnd(slot)
       gest.current.delete(pointerId)
       if (!path || path.length < 12 || !gateOpenRef.current) return
       // a closed path is answered in 泛音: the harmonics of the pitches it
@@ -632,22 +650,24 @@ export default function App() {
             <dl>
               <dt>stand still</dt>
               <dd>breath — the dizi opens on your out-breath at the tonal centre</dd>
-              <dt>slow hand above the hips</dt>
-              <dd>the qin: one pluck per stretch of travel, sliding between (left hand low, right hand high)</dd>
-              <dt>faster, lighter hand</dt>
-              <dd>the pipa plucks as it goes</dd>
-              <dt>hand too slow</dt>
-              <dd>silence — the string rings on</dd>
+              <dt>left hand, raised, moving</dt>
+              <dd>the qin: one pluck when the gesture commits, then the string slides; a sharp reversal is a new stroke</dd>
+              <dt>right hand, raised, moving</dt>
+              <dd>the erhu: a bow — height is pitch, speed is pressure; it sounds only while the hand moves</dd>
+              <dt>hand too slow, or a twitch</dt>
+              <dd>silence</dd>
               <dt>close a loop</dt>
               <dd>泛音 — the harmonics of the pitches you passed through</dd>
-              <dt>fast fist (out of rest)</dt>
-              <dd>八答仓 — clapper, drum, gong, then space; three fast fists turn the pipa wheel (轮指)</dd>
+              <dt>a hand drawn back</dt>
+              <dd>蓄 — a breath before the blow</dd>
+              <dt>fast fist, out of rest, then stopped</dt>
+              <dd>one blow: crack, thud, weight; a heavy one rings the small gong; three in a row at the climax turn the pipa wheel (轮指)</dd>
               <dt>kick</dt>
-              <dd>drum and great gong, a rushing clapper roll; the curtain tears</dd>
+              <dd>the heavy blow, the great drum, the great gong; the curtain tears</dd>
               <dt>stop dead after fast motion</dt>
               <dd>撕边一锣 — one gong, then nothing</dd>
               <dt>turn the torso, and keep turning</dt>
-              <dd>the erhu: one continuous sliding tone</dd>
+              <dd>the drum rolls, denser with the turn</dd>
               <dt>hands together at the chest</dt>
               <dd>the strings are damped, the pitch held</dd>
               <dt>stance width · crouch · guard up</dt>
@@ -677,8 +697,9 @@ export default function App() {
           </p>
           <ul className="gate-legend">
             <li><b>stand still</b> breath — the dizi</li>
-            <li><b>slow hand, raised</b> brush — the qin (left low, right high)</li>
-            <li><b>fast fist</b> 八答仓 — clapper, drum, gong</li>
+            <li><b>left hand, raised</b> the qin, one pluck per gesture</li>
+            <li><b>right hand, raised</b> the erhu, bowed by the hand</li>
+            <li><b>fast fist, then stop</b> one heavy blow</li>
             <li><b>kick</b> drum and great gong</li>
             <li><b>H</b> for the whole legend</li>
           </ul>

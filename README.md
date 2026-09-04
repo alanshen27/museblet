@@ -96,6 +96,115 @@ breathes to open the gate, brushes in 承, throws crosses and a kick in 转,
 settles in 合. `?demo` forces it; it also takes over when the camera is
 unavailable. Pointer strikes still work on top of it.
 
+**Performance grammar.** The body is read as martial dance: 蓄 → 发 → 收.
+A hand drawn back is the wind-up — a breath drawn in (蓄). A strike is one
+peak and its release (发): one heavy Foley blow, never a cloud of notes.
+For 700 ms after a blow nothing else may sound (收). Brush onsets fall only
+on the eighths of a slow phrase pulse (2.4 s / 8 = 300 ms), and only one
+per gesture: the pluck comes when the gesture commits, the string then
+slides; a sharp reversal is a new stroke. Continuous layers (bow, breath,
+roll) exist only while their motion is clearly held.
+
+| gesture | sound | image |
+| --- | --- | --- |
+| **punch** — fast fist out of rest, then stopped | one blow on the saturated impact bus: crack transient, flesh thud (闷响) with a pitched drop, sub weight, dark room tail; a 板 on top; a heavy blow rings the small gong. **Force is weight** — lower thud, more sub, more drive, longer decay | ink burst along the fist, hairline cracks, ring pulse, seal 打 / 发 |
+| **three fast fists** at the climax | the pipa wheel (轮指): the only pipa in the piece | stacked afterimages, seal 连击 |
+| **kick** | the heavy blow, the 大鼓, and the 大锣 for a real one; 冲头 only at the climax | a vertical cinnabar curtain torn through the mist, tall seal 起势 |
+| **hand drawn back** | 蓄: a low breath before the blow | — |
+| **停 — stopped dead after fast motion** | 撕边一锣 | one clean ring, seal 亮相 |
+| **left hand, raised, moving** | the qin: one pluck per gesture on the pulse, sliding between (走手音, friction on the glide) | a wet brush mark that dries |
+| **right hand, raised, moving** | the erhu: a bow — height is pitch, speed is pressure; sound only while it moves | the same, drier |
+| **turning torso** | the drum rolls, denser with the turn | — |
+| **hands together at the torso** | strings damped at the node, pitch held | — |
+| **breath** (shoulders) | 气口: the dizi opens on the out-breath | — |
+| **stillness** | dizi breath at the tonal centre | marks fade to 留白 |
+
+**Gating.** Small movements do nothing. A strike is a **peak and a
+release**: out of rest (slower than 0.9 shoulder-widths/s since its last
+strike) the limb must exceed **3.8 sw/s** for a fist (3.0 with the elbow
+snapping straight) or **3.4 sw/s** for a foot/knee, then fall back below
+55 % of its peak within 600 ms, having travelled ≥ **0.55 / 0.5 sw** from
+where it rested (depth included); refractories **450 / 800 ms**. The whole
+body must be above the expression floor (**0.2**; strikes need half of
+that, their limb being the evidence). Brushing needs a hand above the hips
+faster than **0.85 sw/s for 300 ms** *and* going somewhere (≥ 0.18 sw);
+the erhu bows only while the hand moves; the drum rolls only for a turn
+above 0.6 with the body over 0.3; the dizi opens only past 50 % stillness;
+the pipa wheel needs three fast fists in 转. Small displacements are
+smoothed hard so camera jitter never reads as speed. Tests: camera jitter,
+jitter plus a hand wiggle, heavy jitter, and **ten seconds of idle sway
+with swinging arms** all produce **0 strikes and stay gated**; one clear
+punch is one blow, one clear kick is one blow. The footer shows
+**silent / breath / open**; `D` shows it in the readout. Press **H** for
+the legend.
+
+### Pose model
+
+MediaPipe **Pose Landmarker, BlazePose GHUM "full"** (`?pose=lite|heavy`
+to override). Why: 33 keypoints — face, shoulders, elbows, wrists, hand
+tips, hips, knees, ankles, heels, foot tips — plus metric *world*
+landmarks that give every joint a depth, one network, GPU delegate,
+30 fps in a browser. The lite model loses fast limbs (exactly what a strike
+is); heavy is ~3× slower for a small gain. `src/sanda.ts` normalises every
+joint velocity by shoulder width (so distance from the camera does not
+change force) and includes depth velocity, so a jab straight at the lens
+still reads. A wrist past ~2.4 shoulder-widths/s travelling outward — or a
+slightly slower one while the elbow snaps straight — is a **punch**; a
+foot or ankle whipping, or a knee driving up past the hip line, is a
+**kick**. Force comes from speed plus *drive* (torso turn, extension rate);
+three punches inside 1.2 s is **rapid**. A teleport guard keeps tracking
+snaps from reading as strikes.
+
+### The piece: 起承转合
+
+A session is a performance in the classical four-part form
+(`src/performance.ts`), shown as a glyph row with a progress hairline at
+the top and cued by a gong and a qin phrase at every turn:
+
+| 起 qǐ opening | 承 chéng carrying | 转 zhuǎn turning | 合 hé closing |
+| --- | --- | --- | --- |
+| 留白: breath, the qin in harmonics (泛音), strikes held to a clapper and a small gong | brushwork develops; the full qin and pipa; small percussion | the climax: the full luogu, 轮指, 冲头, residue; the mist thins | the centre resolves; fists speak through the qin; long tails; breath returns |
+
+Time carries the form (~2½ minutes), but the body bends it: early strikes
+pull the turn closer, stillness in the close hastens the end. After 合 the
+room rests; a strike or a long stillness opens a new piece. `?form=brisk`
+runs a rehearsal at a third of the length. Max receives
+`section <glyph> <index> <resting>`.
+
+### The figure
+
+The performer is a **shadow of a premade human**: Mixamo's Michelle from
+the three.js examples (`public/models/performer_michelle.glb`; `?body=rpm`
+for the examples' Ready Player Me avatar). `src/Character.ts` retargets
+**rotations only** — each limb bone is aimed at the joint its child bone
+sits on, the torso takes a full orientation from the hip and shoulder
+lines, the head yaws and pitches with the nose, the fingers are curled
+into fists; the hips take a damped position and the whole figure is fitted
+with one slowly smoothed uniform scale. **No bone is ever scaled**: the
+body's proportions are the asset's bind pose. The mesh is drawn flat black
+as a coverage mask with a soft edge (a ½ % close heals seams between the
+asset's separate meshes; nothing reshapes the body); the edge carries a
+whisper of light at rest and flares cinnabar for the beat of a strike. A
+separate low-resolution joint field, never drawn, is what the mist parts
+around.
+
+### The room
+
+`src/Scene.ts` is one WebGL2 renderer: a stable-fluids ink/mist solver
+with the body as an **obstacle** (mist cannot occupy the figure, so clouds
+part around the torso and swirl off a moving limb; a 2D distance field of
+the body also bends the procedural fog lookup around it), and a procedural
+**shanshui** — five layers of ridged-noise mountains, far peaks high and
+pale dissolving into mist, near banks low and dark, parallax with the
+lean, a water plane reflecting the ridges — breathing with the piece.
+
+### Without a camera
+
+A **ghost performer** (`src/demoPose.ts`) plays the piece: it stands and
+breathes to open the gate, brushes in 承, throws crosses and a kick in 转,
+settles in 合. `?demo` forces it; it also takes over when the camera is
+unavailable. Pointer strikes still work on top of it.
+
 | gesture | sound | image |
 | --- | --- | --- |
 | punch | 八答仓: 板 clapper → gu tap → small luo, then space; a pipa attack at the strike's height | ink burst along the fist, hairline cracks, ring pulse, seal 打 / 发, screen weight shifts |

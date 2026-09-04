@@ -25,10 +25,10 @@ export const RIGHT_HAND = 2001
 const BRUSH_MAX = PUNCH_SPEED * 0.7
 // …and faster than this: below it is a dead zone — small drift, tremor and
 // tracking noise lay down nothing
-const BRUSH_MIN = 0.7
+const BRUSH_MIN = 0.85
 // … and must have held that speed this long before a mark begins: a
 // deliberate movement, not a fidget
-const ARM_MS = 220
+const ARM_MS = 300
 // … and lets go after resting this long
 const REST_MS = 420
 
@@ -182,7 +182,7 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
               h.armY = j.y
             }
             if (now - h.armSince < ARM_MS) continue
-            if (Math.hypot(j.x - h.armX, j.y - h.armY) / b.sw < 0.12) {
+            if (Math.hypot(j.x - h.armX, j.y - h.armY) / b.sw < 0.18) {
               h.armSince = 0
               continue
             }
