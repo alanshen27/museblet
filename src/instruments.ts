@@ -3,7 +3,7 @@
 // surface are stone-rubbing ink (拓片): pale on the dark ground, with a
 // single cinnabar accent reserved for impact.
 
-export type InstrumentId = 'qin' | 'pipa' | 'dizi' | 'luo' | 'gu'
+export type InstrumentId = 'qin' | 'pipa' | 'dizi' | 'erhu' | 'luo' | 'gu'
 
 export interface Instrument {
   id: InstrumentId
@@ -50,6 +50,15 @@ export const INSTRUMENTS: Instrument[] = [
     width: 1.4,
   },
   {
+    id: 'erhu',
+    glyph: '胡',
+    name: 'erhu',
+    role: 'bowed string: continuous 滑音, the bow\'s weight arriving over half a second',
+    ink: '#c9c2b4',
+    brush: 'wet',
+    width: 0.9,
+  },
+  {
     id: 'luo',
     glyph: '锣',
     name: 'luo',
@@ -73,7 +82,7 @@ export function getInstrument(id: string): Instrument {
   return INSTRUMENTS.find((i) => i.id === id) ?? INSTRUMENTS[0]
 }
 
-/** ink palette shared across the interface */
+/** ink palette shared across the interface; swapped by setTheme */
 export const INK = {
   ground: '#0e0d0c',
   paper: '#e6dfd0',
@@ -81,4 +90,34 @@ export const INK = {
   mist: '#4a4642',
   cinnabar: '#b5372a',
   cinnabarDeep: '#7d2419',
+}
+
+export type Theme = 'ink' | 'xuan'
+
+const THEMES: Record<Theme, typeof INK> = {
+  // the ink-stone: pale marks on a dark ground (a stone rubbing)
+  ink: { ...INK },
+  // xuan paper: near-black ink on warm off-white, one muted vermillion 印
+  xuan: {
+    ground: '#ece6d9',
+    paper: '#1a1a1a',
+    ash: '#6a655c',
+    mist: '#b9b2a4',
+    cinnabar: '#b23a2c',
+    cinnabarDeep: '#8a2b20',
+  },
+}
+
+let theme: Theme = 'ink'
+export const getTheme = () => theme
+export function setTheme(t: Theme) {
+  theme = t
+  Object.assign(INK, THEMES[t])
+  const root = document.documentElement
+  root.dataset.theme = t
+  root.style.setProperty('--ground', INK.ground)
+  root.style.setProperty('--paper', INK.paper)
+  root.style.setProperty('--ash', INK.ash)
+  root.style.setProperty('--mist', INK.mist)
+  root.style.setProperty('--cinnabar', INK.cinnabar)
 }

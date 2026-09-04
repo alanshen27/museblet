@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { Stroke } from './music'
-import { getInstrument, INK } from './instruments'
-import { InkFluid } from './InkFluid'
+import { getInstrument, getTheme, INK, type Instrument } from './instruments'
+import { Scene, type Mood } from './Scene'
+import { Character } from './Character'
 import { FIGURE, type BodyState, type Joint, type Strike } from './sanda'
 
 export interface DrawPoint {
@@ -35,6 +36,10 @@ export interface DrawHandle {
   strike: (s: Strike, glyph: string) => void
   /** gate progress 0..1 and whether it has opened */
   setGate: (progress: number, open: boolean) => void
+  /** the piece's mood for the landscape: density, breath, lean, section */
+  setMood: (m: Partial<Mood>) => void
+  /** ink-stone or xuan paper */
+  setTheme: (paper: boolean) => void
 }
 
 interface Props {
@@ -109,6 +114,10 @@ const FADE_MS = 6000
 const MAX_STROKES = 36
 const WET_MS = 1800
 
+// the fluid carries ink *amount*; these are its two pigments, independent
+// of which theme displays them
+const FLUID_INK: [number, number, number] = [0.9, 0.87, 0.8]
+const FLUID_RED: [number, number, number] = [0.71, 0.22, 0.16]
 const hex = (c: string): [number, number, number] => [
   parseInt(c.slice(1, 3), 16) / 255,
   parseInt(c.slice(3, 5), 16) / 255,
@@ -118,6 +127,16 @@ const rgba = (c: string, a: number) => {
   const [r, g, b] = hex(c)
   return `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)},${a})`
 }
+// an instrument's ink in the current theme: on xuan paper every brush is
+// ink, mist is grey, the seal is vermillion
+const inkOf = (instr: Instrument) =>
+  getTheme() === 'xuan'
+    ? instr.brush === 'mist'
+      ? INK.ash
+      : instr.brush === 'seal'
+        ? INK.cinnabar
+        : INK.paper
+    : instr.ink
 const hash = (n: number) => {
   const s = Math.sin(n * 127.1 + 311.7) * 43758.5453
   return s - Math.floor(s)
@@ -195,11 +214,13 @@ export default function InkSurface({
   handleRef,
 }: Props) {
   const glRef = useRef<HTMLCanvasElement>(null)
+  const charRef = useRef<HTMLCanvasElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const fluid = useRef<InkFluid | null>(null)
+  const fluid = useRef<Scene | null>(null)
+  const character = useRef<Character | null>(null)
   const activeStrokes = useRef(new Map<number, Stroke>())
   const pointerState = useRef(
-    new Map<number, { last: { x: number; y: number; t: number } | null; weight: number; speed: number; born: number; path: DrawPoint[] }>(),
+    new Map<number, { last: { x: number; y: number; t: number } | null; weight: number; speed: number; born: number; path: DrawPoint[]; times: number[] }>(),
   )
   const strokesRef = useRef(strokes)
   strokesRef.current = strokes
@@ -231,16 +252,23 @@ export default function InkSurface({
   // ---------------------------------------------------------- strikes --
   const landStrike = useCallback((s: Strike, glyph: string) => {
     const now = performance.now()
+    if (s.kind === 'snap') {
+      // 亮相: the body stops dead — one clean ring and a small seal, no burst
+      rings.current.push({ x: s.x, y: s.y, born: now, life: 900, r0: 0.02, r1: 0.16 + s.force * 0.12, width: 1.4, color: INK.paper })
+      rings.current.push({ x: s.x, y: s.y, born: now + 120, life: 700, r0: 0.01, r1: 0.08, width: 0.8, color: INK.cinnabar })
+      seals.current.push({ x: s.x, y: s.y, size: 0.035 + s.force * 0.02, born: now, glyph, kind: 'punch', rot: (Math.random() - 0.5) * 0.12, seed: Math.random() * 1000 })
+      return
+    }
     const instr = getInstrument(s.kind === 'punch' ? 'luo' : 'gu')
-    const inkColor = hex(INK.paper)
-    const red = hex(INK.cinnabar)
+    const inkColor = FLUID_INK
+    const red = FLUID_RED
     // the fluid takes the shock: punches throw pale ink along the fist,
     // kicks tear a cinnabar-and-ink curtain
     const col: [number, number, number] =
       s.kind === 'punch'
         ? [inkColor[0] * 0.9 + red[0] * 0.1, inkColor[1] * 0.9 + red[1] * 0.1, inkColor[2] * 0.9 + red[2] * 0.1]
         : [red[0] * 0.75 + inkColor[0] * 0.25, red[1] * 0.75 + inkColor[1] * 0.25, red[2] * 0.75 + inkColor[2] * 0.25]
-    fluid.current?.shock({ x: s.x, y: s.y, dx: s.dx, dy: s.dy, force: s.force, kind: s.kind, color: col })
+    fluid.current?.shock({ x: s.x, y: s.y, dx: s.dx, dy: s.dy, force: s.force, kind: s.kind === 'kick' ? 'kick' : 'punch', color: col })
     seals.current.push({
       x: s.x,
       y: s.y,
@@ -271,7 +299,7 @@ export default function InkSurface({
         r0: 0.02,
         r1: 0.2 + s.force * 0.25,
         width: 0.7,
-        color: instr.ink,
+        color: inkOf(instr),
       })
     }
     cracks.current.push({ x: s.x, y: s.y, dx: s.dx, dy: s.dy, born: now, force: s.force, color: INK.paper })
@@ -309,6 +337,7 @@ export default function InkSurface({
     const F = fluid.current
     if (F?.ok) {
       const b = body.current
+      F.setBody(b?.present && b.all.length === 33 ? b.all : null, b?.sw ?? 0.2)
       if (b?.present) {
         const stir = (name: string, j: Joint, amount: number, radius: number) => {
           if (j.vis < 0.4) return
@@ -321,14 +350,12 @@ export default function InkSurface({
           if (d < 0.0015) return
           // slow motion trails a faint wash; fast motion only pushes water
           const ink = Math.max(0, 1 - j.speed / 2.2) * amount
-          const c = hex(INK.paper)
+          const c = FLUID_INK
           F.splat(j.x, j.y, (dx / dt) * 0.35, (dy / dt) * 0.35, [c[0] * ink, c[1] * ink, c[2] * ink], radius, 1)
         }
-        stir('lWrist', b.joints.lWrist, 0.05, 0.02)
-        stir('rWrist', b.joints.rWrist, 0.05, 0.02)
-        stir('lAnkle', b.joints.lAnkle, 0.02, 0.025)
-        stir('rAnkle', b.joints.rAnkle, 0.02, 0.025)
-        stir('nose', b.joints.nose, 0, 0.03)
+        // the obstacle pass moves the mist; the hands add a little ink
+        stir('lWrist', b.joints.lWrist, 0.04, 0.016)
+        stir('rWrist', b.joints.rWrist, 0.04, 0.016)
       }
       if (hover.current) {
         const prev = lastStir.current.get('hover')
@@ -344,12 +371,17 @@ export default function InkSurface({
         const p = s.points[s.points.length - 1]
         const q = s.points[s.points.length - 2]
         if (p && q) {
-          const c = hex(getInstrument(s.pen).ink)
+          const c = FLUID_INK
           F.splat(p.x, p.y, (p.x - q.x) / dt * 0.2, (p.y - q.y) / dt * 0.2, [c[0] * 0.08, c[1] * 0.08, c[2] * 0.08], 0.012)
         }
       }
       F.step(dt)
       F.render()
+    }
+    // the character: the premade rig driven by the tracked joints
+    if (character.current) {
+      character.current.update(body.current, w / h, dt)
+      character.current.render()
     }
 
     g.setTransform(1, 0, 0, 1, 0, 0)
@@ -366,32 +398,16 @@ export default function InkSurface({
     const gt = gate.current
     const opened = gt.open ? Math.min(1, (now - gt.openedAt) / 1400) : 0
 
-    // ---- the ground: one brushed horizon the figure stands on ---------
-    if (opened > 0) {
+    // the waterline lives in the WebGL room; without it, one brushed horizon
+    if (opened > 0 && !F?.ok) {
       const y = h * 0.82
       const ease = 1 - Math.pow(1 - opened, 3)
-      const x0 = w * (0.5 - 0.42 * ease)
-      const x1 = w * (0.5 + 0.42 * ease)
       g.strokeStyle = rgba(INK.ash, 0.28)
       g.lineWidth = 1.2 * dpr
       g.beginPath()
-      const n = 40
-      for (let i = 0; i <= n; i++) {
-        const t = i / n
-        const x = x0 + (x1 - x0) * t
-        const wob = Math.sin(t * 9 + 1.3) * 1.6 + Math.sin(t * 23) * 0.6
-        if (i === 0) g.moveTo(x, y + wob * dpr)
-        else g.lineTo(x, y + wob * dpr)
-      }
+      g.moveTo(w * (0.5 - 0.42 * ease), y)
+      g.lineTo(w * (0.5 + 0.42 * ease), y)
       g.stroke()
-      // the line tapers to nothing at both ends
-      const fade = g.createLinearGradient(x0, 0, x1, 0)
-      fade.addColorStop(0, rgba(INK.ground, 1))
-      fade.addColorStop(0.12, rgba(INK.ground, 0))
-      fade.addColorStop(0.88, rgba(INK.ground, 0))
-      fade.addColorStop(1, rgba(INK.ground, 1))
-      g.fillStyle = fade
-      g.fillRect(x0, y - 4 * dpr, x1 - x0, 8 * dpr)
     }
 
     // ---- the ink ghost: the body as a few brush lines -----------------
@@ -441,13 +457,17 @@ export default function InkSurface({
         }
       }
       const trailAmt = Math.min(1, energy * 1.6)
-      for (let i = 0; i < frames.length - 1; i += 2) {
-        const age = (now - frames[i].t) / 480
-        if (age > 1) continue
-        drawFigure(frames[i], (1 - age) * 0.22 * trailAmt, 1.3, INK.ash, 0)
-      }
       const flash = b.sinceStrike < 140 ? (1 - b.sinceStrike / 140) * 0.7 : 0
-      drawFigure(frames[frames.length - 1], gt.open ? 0.55 : 0.38, 2.2, INK.ash, flash)
+      // the character carries the figure; the ink lines only stand in for
+      // it when the WebGL room is unavailable
+      if (!F?.ok) {
+        for (let i = 0; i < frames.length - 1; i += 2) {
+          const age = (now - frames[i].t) / 480
+          if (age > 1) continue
+          drawFigure(frames[i], (1 - age) * 0.22 * trailAmt, 1.3, INK.ash, 0)
+        }
+        drawFigure(frames[frames.length - 1], gt.open ? 0.55 : 0.38, 2.2, INK.ash, flash)
+      }
       g.globalAlpha = 1
 
       // 残影: the striking limbs leave a ribbon of their path
@@ -529,11 +549,12 @@ export default function InkSurface({
       }
       const nearBeam = px !== null ? Math.max(0, 1 - Math.abs((pts[n >> 1]?.x ?? 0) - px) * 12) : 0
       // wet ink bleeds into the paper; as it dries the halo tightens
+      const inkC = inkOf(instr)
       if (wet > 0.02) {
-        g.shadowColor = rgba(instr.ink, 0.5 * wet)
+        g.shadowColor = rgba(inkC, 0.5 * wet)
         g.shadowBlur = (6 + 18 * wet) * dpr
       } else g.shadowBlur = 0
-      g.fillStyle = instr.ink
+      g.fillStyle = inkC
       g.globalAlpha = alpha * (instr.brush === 'mist' ? 0.35 : 0.82) + nearBeam * 0.2
       trace()
       g.fill()
@@ -762,8 +783,10 @@ export default function InkSurface({
   useEffect(() => {
     const canvas = canvasRef.current
     const glc = glRef.current
-    if (!canvas || !glc) return
-    if (!fluid.current) fluid.current = new InkFluid(glc)
+    const cc = charRef.current
+    if (!canvas || !glc || !cc) return
+    if (!fluid.current) fluid.current = new Scene(glc)
+    if (!character.current) character.current = new Character(cc)
     const resize = () => {
       const rect = canvas.getBoundingClientRect()
       const dpr = devicePixelRatio
@@ -773,6 +796,7 @@ export default function InkSurface({
       glc.width = Math.round(rect.width * Math.min(dpr, 1.5))
       glc.height = Math.round(rect.height * Math.min(dpr, 1.5))
       fluid.current?.resize()
+      character.current?.resize(Math.round(rect.width * Math.min(dpr, 2)), Math.round(rect.height * Math.min(dpr, 2)))
     }
     resize()
     const observer = new ResizeObserver(resize)
@@ -851,6 +875,12 @@ export default function InkSurface({
         if (open && !gt.open) gt.openedAt = performance.now()
         gt.progress = progress
         gt.open = open
+        fluid.current?.setMood({ gate: open ? 1 : 0 })
+      },
+      setMood: (m) => fluid.current?.setMood(m),
+      setTheme: (paper) => {
+        fluid.current?.setTheme(paper)
+        character.current?.setTheme(paper)
       },
     }
     return () => {
@@ -869,6 +899,7 @@ export default function InkSurface({
       speed: 0,
       born: performance.now(),
       path: [],
+      times: [],
     }
     const now = performance.now()
     if (state.last) {
@@ -885,19 +916,21 @@ export default function InkSurface({
     const pressure = e.pressure > 0 && e.pressure !== 0.5 ? e.pressure : state.weight
     const p = { x, y, pressure, speed: state.speed }
     state.path.push(p)
+    state.times.push(now)
     return p
   }
 
   return (
     <div className="ink-surface">
       <canvas ref={glRef} className="ink-fluid" />
+      <canvas ref={charRef} className="ink-character" />
       <canvas
         ref={canvasRef}
         className="ink-marks"
         style={{ touchAction: 'none' }}
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId)
-          pointerState.current.set(e.pointerId, { last: null, weight: 0.5, speed: 0, born: performance.now(), path: [] })
+          pointerState.current.set(e.pointerId, { last: null, weight: 0.5, speed: 0, born: performance.now(), path: [], times: [] })
           strokeStart(e.pointerId, penId, toPoint(e))
         }}
         onPointerMove={(e) => {
@@ -910,17 +943,28 @@ export default function InkSurface({
           hover.current = null
         }}
         onPointerUp={(e) => {
-          // a short fast flick with the pointer is a strike: judged by
-          // velocity (screen widths per second), like the body's fists
+          // a short fast flick with the pointer is a strike. Judged by
+          // velocity like the body's fists: the peak speed over any short
+          // stretch of the gesture (a flick is fast in the middle), or a
+          // brisk average over the whole of it
           const st = pointerState.current.get(e.pointerId)
           const dur = st ? Math.max(16, performance.now() - st.born) : Infinity
-          if (st && dur < 520 && st.path.length >= 2) {
+          if (st && dur < 700 && st.path.length >= 2) {
             const a = st.path[0]
             const z = st.path[st.path.length - 1]
             const d = Math.hypot(z.x - a.x, z.y - a.y)
-            const speed = d / (dur / 1000)
-            if (d > 0.05 && speed > 0.55) {
+            const avg = d / (dur / 1000)
+            let peak = 0
+            for (let i = 2; i < st.path.length; i++) {
+              const p0 = st.path[i - 2]
+              const p1 = st.path[i]
+              const dt = Math.max(8, st.times[i] - st.times[i - 2]) / 1000
+              peak = Math.max(peak, Math.hypot(p1.x - p0.x, p1.y - p0.y) / dt)
+            }
+            // …or simply a large displacement inside a short press
+            if ((d > 0.04 && (avg > 0.45 || peak > 1.1)) || (d > 0.16 && dur < 700)) {
               strokeCancel(e.pointerId)
+              const speed = Math.max(avg, peak * 0.6)
               onPointerStrikeRef.current?.({
                 kind: Math.abs(z.y - a.y) > Math.abs(z.x - a.x) * 1.8 ? 'kick' : 'punch',
                 side: z.x < 0.5 ? 'L' : 'R',
@@ -930,6 +974,8 @@ export default function InkSurface({
                 dy: (z.y - a.y) / d,
                 force: Math.min(1, Math.max(0.25, speed / 3)),
                 t: performance.now(),
+                drive: 0.3,
+                confidence: Math.min(1, 0.5 + speed / 4),
               })
               return
             }

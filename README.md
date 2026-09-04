@@ -9,6 +9,11 @@ ground, one red seal — and the musical language is Chinese: pentatonic
 modes, guqin space and decay, pipa attack, dizi breath, luogu impact, and
 留白, the silence that makes the strike land.
 
+You appear as an energy silhouette — a premade humanoid rig driven by your
+joints — inside a living 山水: mountains of ridged ink, mist that parts
+around your body and swirls off a moving limb, water reflecting the peaks.
+A session is a piece in four parts, 起承转合.
+
 Runs standalone in the browser with a Web Audio engine, or inside Max/MSP
 via `jweb`, where the DSP is done by the patches in `max/`.
 
@@ -24,24 +29,97 @@ game. Four phases, shown as one glyph at the right edge:
 | release | 发 fā | a fist or knee explodes outward | the ink fluid takes the shock, a cinnabar seal is stamped, the limb leaves an afterimage; the luogu answers |
 | recovery | 收 shōu | the limb returns | the residue of the strike hangs in the air; new strikes wait a beat |
 
-Strikes are read from MediaPipe Pose (33 landmarks, one model, fast) by
-`src/sanda.ts`: joint velocities are normalised by shoulder width, a wrist
-past ~2.4 shoulder-widths/s travelling outward is a **punch**, a knee or
-ankle whipping upward is a **kick**. Force comes from speed; three punches
-inside 1.2 s is **rapid**.
+### Pose model
+
+MediaPipe **Pose Landmarker, BlazePose GHUM "full"** (`?pose=lite|heavy`
+to override). Why: 33 keypoints — face, shoulders, elbows, wrists, hand
+tips, hips, knees, ankles, heels, foot tips — plus metric *world*
+landmarks that give every joint a depth, one network, GPU delegate,
+30 fps in a browser. The lite model loses fast limbs (exactly what a strike
+is); heavy is ~3× slower for a small gain. `src/sanda.ts` normalises every
+joint velocity by shoulder width (so distance from the camera does not
+change force) and includes depth velocity, so a jab straight at the lens
+still reads. A wrist past ~2.4 shoulder-widths/s travelling outward — or a
+slightly slower one while the elbow snaps straight — is a **punch**; a
+foot or ankle whipping, or a knee driving up past the hip line, is a
+**kick**. Force comes from speed plus *drive* (torso turn, extension rate);
+three punches inside 1.2 s is **rapid**. A teleport guard keeps tracking
+snaps from reading as strikes.
+
+### The piece: 起承转合
+
+A session is a performance in the classical four-part form
+(`src/performance.ts`), shown as a glyph row with a progress hairline at
+the top and cued by a gong and a qin phrase at every turn:
+
+| 起 qǐ opening | 承 chéng carrying | 转 zhuǎn turning | 合 hé closing |
+| --- | --- | --- | --- |
+| 留白: breath, the qin in harmonics (泛音), strikes held to a clapper and a small gong | brushwork develops; the full qin and pipa; small percussion | the climax: the full luogu, 轮指, 冲头, residue; the mist thins | the centre resolves; fists speak through the qin; long tails; breath returns |
+
+Time carries the form (~2½ minutes), but the body bends it: early strikes
+pull the turn closer, stillness in the close hastens the end. After 合 the
+room rests; a strike or a long stillness opens a new piece. `?form=brisk`
+runs a rehearsal at a third of the length. Max receives
+`section <glyph> <index> <resting>`.
+
+### The character
+
+`src/Character.ts` loads a premade rig — the three.js examples' Mixamo
+**X Bot** (`public/models/xbot.glb`, standard `mixamorig` skeleton,
+T-pose rest, neutral athletic proportions) — and retargets **rotations
+only**: each limb bone is aimed at the joint its child bone sits on; the
+torso takes a full orientation from the hip and shoulder lines; the head
+yaws and pitches with the nose. The hips take a damped position and the
+whole figure is fitted to the frame with one slowly smoothed uniform
+scale; no bone is ever scaled, so proportions are the asset's. It is
+rendered unlit as an **energy silhouette**: a near-black fill, a thin chi
+rim that brightens with motion and turns cinnabar for a beat when a strike
+lands, slow inner filaments, and an additive aura hull. The rig's
+panel-line "joints" mesh is never drawn. Any GLB with `mixamorig*` bones
+drops in at `MODEL_URL`.
+
+### The room
+
+`src/Scene.ts` is one WebGL2 renderer: a stable-fluids ink/mist solver
+with the body as an **obstacle** (mist cannot occupy the figure, so clouds
+part around the torso and swirl off a moving limb; a 2D distance field of
+the body also bends the procedural fog lookup around it), and a procedural
+**shanshui** — five layers of ridged-noise mountains, far peaks high and
+pale dissolving into mist, near banks low and dark, parallax with the
+lean, a water plane reflecting the ridges — breathing with the piece.
+
+### Without a camera
+
+A **ghost performer** (`src/demoPose.ts`) plays the piece: it stands and
+breathes to open the gate, brushes in 承, throws crosses and a kick in 转,
+settles in 合. `?demo` forces it; it also takes over when the camera is
+unavailable. Pointer strikes still work on top of it.
 
 | gesture | sound | image |
 | --- | --- | --- |
 | punch | 八答仓: 板 clapper → gu tap → small luo, then space; a pipa attack at the strike's height | ink burst along the fist, hairline cracks, ring pulse, seal 打 / 发, screen weight shifts |
-| rapid punches | 轮指 tremolo on the pipa, denser with each hit | stacked afterimages, seal 连 |
+| rapid punches | 轮指: a wheel of outward plucks whose density is a rate fed by the punching and winding down on its own — not a roll on a grid | stacked afterimages, seal 连 |
 | kick | gu + 大锣 together, a 冲头 clapper roll accelerating into a second gong; the pipa jumps register | a vertical curtain torn through the ink, splatter, tall seal 起势 |
-| slow hand above the hips | qin string held and slid (走手音); left hand low, right hand high | a wet brush mark that dries, 飞白 where the hand moved faster |
+| slow, wet hand above the hips | qin: an onset each time the integral of speed crosses a threshold, slides between (走手音, friction on the glide); left hand low register, right hand high | a wet brush mark that dries |
+| fast, dry hand | pipa attacks as it goes | 飞白 hairlines where the hand moved fast |
+| hand too slow | silence — the string rings on | the mark stands |
+| closed path | 泛音: the harmonics of the pitches it passed through | — |
+| turning torso (throw, spin) | erhu: one continuous 滑音 around the centre, the bow's weight arriving over ~500 ms | — |
+| 亮相 — fast motion that stops dead | 撕边一锣: a rim roll rushing into one gong, then nothing | one clean ring, seal 定 |
+| seize — hands drawn together at the torso | strings muted at the node, pitch held | — |
+| breath (shoulders) | 气口: the dizi phrase opens on the out-breath, closes on the in-breath; air pressure sets how much of the tone is noise | — |
 | stillness | dizi breath at the tonal centre | the ghost stands alone; marks fade to 留白 |
 
-**No camera?** Hold the pointer for a moment to open the gate. Dragging
-slowly brushes; a quick flick is a punch (vertical flick: kick).
-`Enter` also opens the gate. `D` shows the tracking view, `P` loops the
-marks on the surface as a sequence (x = time, y = pitch), `R` clears.
+**Pointer:** hold it for a moment to open the gate. Dragging slowly
+brushes; a quick flick is a punch (vertical flick: kick). `Enter` also
+opens the gate. `D` shows the tracking view, `T` turns the sheet over
+(ink-stone ↔ xuan paper; `?theme=xuan`), `P` loops the marks on the
+surface 散板 — unquantised, x = time, y = pitch, length = duration — `R`
+clears. Sound starts on the first click or key (browser autoplay rules).
+
+**Anti-defaults, by design:** no drop, no sidechain, no kick/snare groove,
+no pentatonic arpeggiator; the luogu punctuates action (冲头 / 撕边一锣 /
+八答仓) and the loop is free meter.
 
 ## Sound
 
@@ -50,14 +128,25 @@ marks on the surface as a sequence (x = time, y = pitch), `R` clears.
 The Web Audio engine mirrors professional Max practice:
 
 - **Plucked strings** — a Karplus-Strong / waveguide string in an
-  AudioWorklet (`worklets/string.js`): shaped noise excitation with a
-  pluck-position comb, fractional delay, one-pole loop loss, per-period
-  gain set from a target T60. `freq` is an AudioParam, so slides retune the
-  ringing string instead of re-plucking. Qin (silk, long, dark) and pipa
-  (bright, short) are the same model with different parameters; a body
-  resonance pair sits after each string.
-- **Dizi** — bandpassed noise + sine core + a 笛膜 membrane buzz a hair
-  off the octave, vibrato depth from body energy. Swells with stillness.
+  AudioWorklet (`worklets/string.js`; native `DelayNode` feedback is
+  128-sample coarse): shaped noise excitation with a pluck-position comb,
+  fractional delay, one-pole loop loss, per-period gain set from a target
+  T60. `freq` is an AudioParam, so slides retune the ringing string; a
+  slide also rubs the finger along the string — **friction** noise
+  proportional to glide speed enters the loop and costs energy, so a glide
+  decays into friction and then silence (吟猱). **泛音** plucks comb the
+  excitation at the touched node (x[n] + x[n − P/node]). Qin (散音/按音/泛音;
+  silk, long, dark) and pipa (bright, short) are the same model with
+  different parameters; a body resonance pair sits after each string.
+- **Pipa 轮指** — a wheel (`feedWheel`): a scheduler plucks at a rate fed
+  by punch rapidity or brush speed, each finger a little different, and
+  winds down by itself when the feeding stops.
+- **Dizi** — the breath *is* the tone: air through a narrow resonator at
+  the pitch, a sine core only as a fundamental, a 笛膜 membrane buzz a hair
+  off the octave. Air pressure sets the noise/core mix and the resonator's
+  Q; the phrase is gated by the body's own breath (气口).
+- **Erhu** — a bowed string (sawtooth → bow lowpass → two body formants),
+  one continuous portamento, gain and brightness arriving over ~500 ms.
 - **Luogu** — the gong is a noise burst into a bank of high-Q resonators
   whose centre frequencies glide after the strike (大锣 sags, 小锣 rises),
   with a hiss riding the early decay. The drum is a skin sweep + body
@@ -94,6 +183,8 @@ abstractions and runs an FX rack fed from the bus:
   +4.5% → −3.5% over 1.3 s via `line~`; `svf~` hiss.
 - `nocturne.gu` — drum below midi 84 (skin sweep `cycle~` + body), 板
   clapper at 84+ (`reson~` click).
+- `nocturne.erhu` — `saw~` → `onepole~` bow → two `reson~` body formants,
+  `line~` 250 ms glide on the pitch, bow weight over 500 ms.
 - FX: `tapin~ 2000 / tapout~ 410. 630.` ping-pong echo with `onepole~`
   damping; Schroeder hall (`comb~` ×4 → `allpass~` ×2 → `onepole~`);
   `pfft~ nocturne.smear` spectral smear (`vectral~` slide on bin
@@ -110,11 +201,12 @@ Strikes kick the spectral smear's release time.
 
 Out of jweb (to Max):
 
-- `note <instr> <midi> <velocity> <durationMs>` — instr ∈ `qin pipa dizi luo gu`
+- `note <instr> <midi> <velocity> <durationMs>` — instr ∈ `qin pipa dizi erhu luo gu`
   (gu at midi ≥ 84 is the 板 clapper)
-- `strike <punch|kick> <midi> <velocity> <x> <y> <rapid>` — a landed strike
-  (the luogu cell is also spelled out as `note` events)
-- `ctl <width|root|guard|breath|energy|lean> <0..1>` — the body stream, ~20 Hz
+- `strike <punch|kick|snap> <midi> <velocity> <x> <y> <rapid>` — a landed
+  strike or a 亮相 (the luogu cell is also spelled out as `note` events)
+- `section <起|承|转|合> <index> <resting>` — the form turns
+- `ctl <width|root|guard|breath|energy|lean|breathSignal|seize> <value>` — the body stream, ~20 Hz
 - `centre <midi>` — the tonal centre drifting (宫 → 羽 → 商 → 徵)
 - `gate open` — the stance gate opened
 - `transport play|stop`, `ready`
@@ -130,23 +222,54 @@ Into jweb (from Max): `play`, `stop`, `clear`, `open`, `tempo <bpm>`,
 shadowed home). 七声 — 清乐 qingyue, 雅乐 yayue (变徵), 燕乐 yanyue (闰).
 Harmony stacks 4ths and 5ths, no 3rds; the centre drifts slowly.
 
+## Strike event surface (for test harnesses)
+
+Every strike — live pose, ghost performer, pointer, or a harness feeding
+fixture frames — goes through one bus, `src/strikes.ts`:
+
+```ts
+import { onStrike, emitStrike, strikeEvent } from './strikes'
+onStrike((e) => { /* e.type punch|kick|snap, e.side, e.confidence, e.force, e.x, e.y, e.joints, e.rapid, e.source */ })
+emitStrike(strikeEvent({ type: 'punch', side: 'L', confidence: 0.9, force: 0.7, source: 'harness' }))
+```
+
+The app subscribes once and does sound, ink and Max from there. In the
+built page the same surface is on `window.nocturne`: `onStrike`,
+`emitStrike`, `strikeEvent`, the temporal `SandaTracker` (feed it
+MediaPipe landmark sequences: `tracker.update(landmarks, tMs, world)` →
+`state.strikes[]` with `confidence`), and `classifyPose(landmarks)` — a
+single-frame *pose-shape* classifier for still photos (`punch | kick |
+guard | stance | none` with `side`, `confidence`, `joints`, elbow/knee
+detail), since a still carries no velocity. Both return the same
+vocabulary so one set of assertions covers fixtures and live runs.
+`strike … <confidence>` is appended to the Max message as a trailing
+argument.
+
+## Two grounds
+
+The ink-stone (default): pale marks on a near-black warm ground, a stone
+rubbing. Xuan paper (`T`, `?theme=xuan`): near-black ink on warm off-white,
+one muted vermillion 印. The same fluid carries ink *amount*; the stone
+shows it as light, the paper as ink. Interface type is a crisp grotesque;
+calligraphy and the serif appear only at brand moments — the mark, the
+gate 立, the section turn. The landscape is nearly absent before the gate
+and in 起 and arrives with the piece's density; the empty canvas is the
+product.
+
 ## Image
 
-- `src/InkFluid.ts` — a WebGL2 stable-fluids solver (semi-Lagrangian
-  advection, vorticity confinement, Jacobi pressure) whose dye is ink.
-  Slow hands stir it, strikes shock it; rendered with an ink-wash tone
-  curve, paper grain and a heavy vignette. A strike also kicks a
-  spring-loaded screen displacement — weight, not shake.
-- `src/InkSurface.tsx` — the 2D layer: brush marks as variable-width
+- `src/Scene.ts` — the room (see above): fluid, body field, shanshui,
+  ink-wash tone curve, paper grain, a spring-loaded screen displacement on
+  strikes (weight, not shake).
+- `src/Character.ts` — the energy silhouette on the premade rig.
+- `src/InkSurface.tsx` — the 2D ink layer: brush marks as variable-width
   ribbons that bleed while wet and dry with 飞白 hairlines where the hand
-  moved fast; the body as a few ash brush lines with speed-dependent
-  afterimages (残影); limb-path ribbons on fast motion; cinnabar seals with
-  hand-cut edges pressed on impact; hairline cracks, ring pulses,
-  splatter.
+  moved fast; limb-path ribbons (残影) on fast motion; cinnabar seals with
+  hand-cut edges pressed on impact; hairline cracks, ring pulses, splatter.
 
 Requires camera permission and network access (the pose model loads
-from a CDN). Without WebGL2 float textures the fluid layer is skipped and
-the 2D ink still runs.
+from a CDN); the character rig ships in `public/models/`. Without WebGL2
+float textures the room is skipped and the 2D ink still runs.
 
 ## Run
 

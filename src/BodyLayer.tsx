@@ -3,10 +3,19 @@ import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision'
 import type { DrawHandle, DrawPoint } from './InkSurface'
 import { PUNCH_SPEED, SandaTracker, type BodyState } from './sanda'
 import { INK } from './instruments'
+import { demoPose } from './demoPose'
+import { emitStrike } from './strikes'
 
 const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm'
-const MODEL_URL =
-  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task'
+// BlazePose GHUM "full": 33 keypoints with metric world coordinates. The
+// lite model drops accuracy on fast limbs (exactly what a strike is); the
+// heavy model is ~3x slower for a small gain. `?pose=heavy` / `?pose=lite`
+// override.
+const MODEL_URLS: Record<string, string> = {
+  lite: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task',
+  full: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task',
+  heavy: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task',
+}
 
 // pointer ids for the two brushing hands
 export const LEFT_HAND = 2000
@@ -23,15 +32,22 @@ interface Props {
   onBody: (b: BodyState) => void
   /** whether the gate has opened: before it, hands only stand */
   open: boolean
+  /** current section 0..3, for the ghost performer */
+  section: number
+  /** seconds since the piece opened, for the ghost performer */
+  pieceSeconds: number
+  /** seconds since the section began */
+  sectionSeconds: number
 }
 
 /**
  * Camera body tracking. MediaPipe Pose finds the whole figure; the Sanda
- * tracker reads stance, breath and strikes from it. A slow hand held above
- * the hips brushes the surface; a fast one strikes. Press D for the
- * tracking view.
+ * tracker reads stance, breath and strikes from it. A slow left hand above
+ * the hips brushes the qin, a slow right hand the pipa; a fast one strikes.
+ * Without a camera (or with `?demo`), a scripted ghost performer plays
+ * the piece. Press D for the tracking view.
  */
-export default function BodyLayer({ surface, onBody, open }: Props) {
+export default function BodyLayer({ surface, onBody, open, section, pieceSeconds, sectionSeconds }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   const [dev, setDev] = useState(false)
@@ -41,7 +57,14 @@ export default function BodyLayer({ surface, onBody, open }: Props) {
   openRef.current = open
   const onBodyRef = useRef(onBody)
   onBodyRef.current = onBody
-  const [status, setStatus] = useState<'starting' | 'tracking' | 'unavailable'>('starting')
+  const sectionRef = useRef(section)
+  sectionRef.current = section
+  const secondsRef = useRef(pieceSeconds)
+  secondsRef.current = pieceSeconds
+  const sectionSecRef = useRef(sectionSeconds)
+  sectionSecRef.current = sectionSeconds
+  const [status, setStatus] = useState<'starting' | 'tracking' | 'ghost'>('starting')
+  const [model, setModel] = useState('full')
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -58,6 +81,12 @@ export default function BodyLayer({ surface, onBody, open }: Props) {
     let stream: MediaStream | null = null
     let raf = 0
     let stopped = false
+    let ghost = false
+    let ghostSince = 0
+    const params = new URLSearchParams(window.location.search)
+    const wantDemo = params.has('demo')
+    const modelName = MODEL_URLS[params.get('pose') ?? ''] ? (params.get('pose') as string) : 'full'
+    setModel(modelName)
     const tracker = new SandaTracker(true)
     const hands: Record<number, { brushing: boolean; restSince: number }> = {
       [LEFT_HAND]: { brushing: false, restSince: 0 },
@@ -84,29 +113,28 @@ export default function BodyLayer({ surface, onBody, open }: Props) {
       if (!g) return
       g.clearRect(0, 0, W, H)
       if (!devRef.current) return
+      g.font = '12px ui-monospace, monospace'
+      g.textBaseline = 'top'
       if (!b) {
-        g.font = '12px ui-monospace, monospace'
         g.fillStyle = INK.ash
-        g.fillText(landmarker ? 'pose · waiting for camera frames' : 'pose · no camera — pointer only', 22, H - 40)
+        g.fillText('pose · waiting for camera frames', 22, H - 40)
         return
       }
       const lines = [
-        `pose ${b.present ? 'tracking' : 'lost'}   phase ${b.phase}`,
-        `energy ${b.energy.toFixed(2)}  stillness ${b.stillness.toFixed(2)}`,
-        `stance ${b.stance.toFixed(2)}  root ${b.root.toFixed(2)}  guard ${b.guard.toFixed(2)}  lean ${b.lean.toFixed(2)}`,
+        `${ghost ? 'ghost performer' : `pose ${modelName}`} ${b.present ? 'tracking' : 'lost'}   phase ${b.phase}   section ${sectionRef.current} @ ${sectionSecRef.current.toFixed(1)}s   piece ${secondsRef.current.toFixed(1)}s`,
+        `energy ${b.energy.toFixed(2)}  stillness ${b.stillness.toFixed(2)}  breath ${b.breath.toFixed(2)}`,
+        `stance ${b.stance.toFixed(2)}  root ${b.root.toFixed(2)}  guard ${b.guard.toFixed(2)}  lean ${b.lean.toFixed(2)}  turn ${b.turn.toFixed(2)}`,
         `L wrist ${b.joints.lWrist?.speed.toFixed(1) ?? '-'}  R wrist ${b.joints.rWrist?.speed.toFixed(1) ?? '-'}  (punch > ${PUNCH_SPEED})`,
-        `L knee ${b.joints.lKnee?.speed.toFixed(1) ?? '-'}  R knee ${b.joints.rKnee?.speed.toFixed(1) ?? '-'}  rapid ${b.rapid}`,
+        `L foot ${b.joints.lFoot?.speed.toFixed(1) ?? '-'}  R foot ${b.joints.rFoot?.speed.toFixed(1) ?? '-'}  rapid ${b.rapid}`,
       ]
-      g.font = '12px ui-monospace, monospace'
-      g.textBaseline = 'top'
       g.fillStyle = 'rgba(0,0,0,0.5)'
-      g.fillRect(16, H - 16 - lines.length * 16 - 8, 460, lines.length * 16 + 8)
+      g.fillRect(16, H - 16 - lines.length * 16 - 8, 520, lines.length * 16 + 8)
       g.fillStyle = INK.paper
       lines.forEach((l, i) => g.fillText(l, 22, H - 16 - lines.length * 16 - 4 + i * 16))
-      for (const j of Object.values(b.joints)) {
+      for (const j of b.all) {
         g.fillStyle = j.vis > 0.5 ? INK.paper : INK.ash
         g.beginPath()
-        g.arc(j.x * W, j.y * H, 3, 0, Math.PI * 2)
+        g.arc(j.x * W, j.y * H, 2.5, 0, Math.PI * 2)
         g.fill()
       }
     }
@@ -114,13 +142,15 @@ export default function BodyLayer({ surface, onBody, open }: Props) {
     const brush = (b: BodyState) => {
       const hipY = ((b.joints.lHip?.y ?? 1) + (b.joints.rHip?.y ?? 1)) / 2
       const now = performance.now()
-      for (const [id, name] of [
-        [LEFT_HAND, 'lWrist'],
-        [RIGHT_HAND, 'rWrist'],
+      // both hands brush; the app chooses qin or pipa from how the hand
+      // moves (slow and wet, or fast and dry), in each hand's register
+      for (const [id, name, instr] of [
+        [LEFT_HAND, 'lWrist', 'qin'],
+        [RIGHT_HAND, 'rWrist', 'qin'],
       ] as const) {
         const j = b.joints[name]
         const h = hands[id]
-        const struck = b.strikes.some((s) => s.kind === 'kick' || (s.side === (id === LEFT_HAND ? 'L' : 'R')))
+        const struck = b.strikes.some((s) => s.kind === 'kick' || s.side === (id === LEFT_HAND ? 'L' : 'R'))
         if (!j || j.vis < 0.45 || !openRef.current || struck || j.y > hipY) {
           endBrush(id)
           continue
@@ -132,7 +162,6 @@ export default function BodyLayer({ surface, onBody, open }: Props) {
           speed: j.speed,
         }
         if (j.speed > BRUSH_MAX) {
-          // too fast to be a brush, not fast enough to be a fist: lift
           endBrush(id)
           continue
         }
@@ -140,29 +169,77 @@ export default function BodyLayer({ surface, onBody, open }: Props) {
           h.restSince = 0
           if (!h.brushing) {
             h.brushing = true
-            surface.current?.strokeStart(id, 'qin', p)
-          } else surface.current?.strokeMove(id, 'qin', p)
+            surface.current?.strokeStart(id, instr, p)
+          } else surface.current?.strokeMove(id, instr, p)
         } else if (h.brushing) {
           if (!h.restSince) h.restSince = now
           if (now - h.restSince > REST_MS) endBrush(id)
-          else surface.current?.strokeMove(id, 'qin', p)
+          else surface.current?.strokeMove(id, instr, p)
         }
       }
+    }
+
+    const feed = (b: BodyState) => {
+      surface.current?.setBody(b)
+      onBodyRef.current(b)
+      const source = ghost ? 'ghost' : 'pose'
+      for (const st of b.strikes) {
+        emitStrike({
+          type: st.kind,
+          side: st.side,
+          confidence: st.confidence,
+          force: st.force,
+          x: st.x,
+          y: st.y,
+          dx: st.dx,
+          dy: st.dy,
+          joints: b.joints,
+          rapid: b.rapid,
+          source,
+          t: st.t,
+        })
+      }
+      if (b.snap) {
+        // 亮相: the body stopped dead after fast motion
+        const nose = b.joints.nose
+        emitStrike({
+          type: 'snap',
+          side: 'L',
+          confidence: Math.min(1, 0.4 + b.snapForce * 0.6),
+          force: b.snapForce,
+          x: nose?.x ?? 0.5,
+          y: (nose?.y ?? 0.4) + b.sw * 1.2,
+          dx: 0,
+          dy: -1,
+          joints: b.joints,
+          rapid: 0,
+          source,
+          t: b.t,
+        })
+      }
+      brush(b)
+      readout(b)
     }
 
     let lastVideoTime = -1
     const loop = () => {
       if (stopped) return
-      if (landmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+      const now = performance.now()
+      if (ghost) {
+        // the ghost performer: before the gate opens it stands and
+        // breathes, so the gate opens itself; then it plays the piece
+        // one continuous clock for the performer's motion; the section and
+        // its own time come from the form once the gate is open
+        const t = (now - ghostSince) / 1000
+        const frame = demoPose(t, openRef.current ? sectionRef.current : 0, openRef.current ? sectionSecRef.current : t)
+        feed(tracker.update(frame.landmarks, now, frame.world))
+      } else if (landmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
         lastVideoTime = video.currentTime
         try {
-          const res = landmarker.detectForVideo(video, performance.now())
+          const res = landmarker.detectForVideo(video, now)
           const lm = res.landmarks?.[0] ?? null
-          const b = tracker.update(lm, performance.now())
-          surface.current?.setBody(b)
-          onBodyRef.current(b)
-          brush(b)
-          readout(b)
+          const world = res.worldLandmarks?.[0] ?? null
+          feed(tracker.update(lm, now, world))
         } catch (err) {
           console.warn('pose detection failed:', err)
         }
@@ -170,7 +247,19 @@ export default function BodyLayer({ surface, onBody, open }: Props) {
       raf = requestAnimationFrame(loop)
     }
     loop()
+
+    const startGhost = () => {
+      ghost = true
+      ghostSince = performance.now()
+      tracker.reset()
+      setStatus('ghost')
+    }
+
     ;(async () => {
+      if (wantDemo) {
+        startGhost()
+        return
+      }
       try {
         const [fileset, media] = await Promise.all([
           FilesetResolver.forVisionTasks(WASM_BASE),
@@ -186,7 +275,7 @@ export default function BodyLayer({ surface, onBody, open }: Props) {
         video.srcObject = media
         await video.play()
         landmarker = await PoseLandmarker.createFromOptions(fileset, {
-          baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
+          baseOptions: { modelAssetPath: MODEL_URLS[modelName], delegate: 'GPU' },
           runningMode: 'VIDEO',
           numPoses: 1,
           minPoseDetectionConfidence: 0.5,
@@ -195,8 +284,8 @@ export default function BodyLayer({ surface, onBody, open }: Props) {
         })
         setStatus('tracking')
       } catch (err) {
-        console.warn('body tracking unavailable:', err)
-        setStatus('unavailable')
+        console.warn('body tracking unavailable, the ghost performs:', err)
+        if (!stopped) startGhost()
       }
     })()
 
@@ -213,18 +302,13 @@ export default function BodyLayer({ surface, onBody, open }: Props) {
 
   return (
     <>
-      <video
-        ref={videoRef}
-        muted
-        playsInline
-        className={`body-video ${dev ? 'dev' : ''}`}
-      />
+      <video ref={videoRef} muted playsInline className={`body-video ${dev ? 'dev' : ''}`} />
       <canvas ref={overlayRef} className="body-overlay" />
-      {status !== 'tracking' && (
-        <div className={`body-status ${status}`} aria-live="polite">
-          {status === 'starting' ? 'camera · waking' : 'camera · unavailable — the pointer will do'}
-        </div>
-      )}
+      <div className={`body-status ${status}`} aria-live="polite">
+        {status === 'starting' && 'camera · waking'}
+        {status === 'tracking' && `pose · ${model}`}
+        {status === 'ghost' && 'no camera · a ghost performs — click for sound; the pointer strikes'}
+      </div>
     </>
   )
 }
