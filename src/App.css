@@ -372,16 +372,108 @@
 
 .gate-legend {
   margin: 0;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  padding: 0;
+  list-style: none;
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.06em;
   color: var(--ash);
   position: absolute;
   bottom: 26px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  gap: 26px;
   white-space: nowrap;
+}
+
+.gate-legend b {
+  font-weight: 500;
+  color: var(--paper);
+  margin-right: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 10px;
+}
+
+/* -------------------------------------------------------------- help -- */
+.help {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+}
+
+.help-card {
+  width: min(680px, 92vw);
+  max-height: 88vh;
+  overflow: auto;
+  padding: 30px 36px 26px;
+  background: color-mix(in srgb, var(--ground) 88%, black);
+  border: 1px solid rgba(230, 223, 208, 0.12);
+  color: var(--paper);
+  font-family: var(--ui);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.app.theme-xuan .help-card {
+  background: color-mix(in srgb, var(--ground) 92%, white);
+  border-color: rgba(26, 26, 26, 0.12);
+}
+
+.help-card h3 {
+  margin: 0 0 6px;
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+}
+
+.help-card h3 .cjk {
+  font-size: 18px;
+  margin-right: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.help-note {
+  margin: 0 0 18px;
+  color: var(--ash);
+}
+
+.help-card dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  column-gap: 22px;
+  row-gap: 7px;
+}
+
+.help-card dt {
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.help-card dd {
+  margin: 0;
+  color: var(--ash);
+}
+
+.help-keys,
+.help-form {
+  margin: 18px 0 0;
+  color: var(--ash);
+  font-size: 11.5px;
+}
+
+.help-keys b {
+  color: var(--paper);
+  font-weight: 500;
 }
 
 /* -------------------------------------------------------------- form -- */

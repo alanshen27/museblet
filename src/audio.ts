@@ -659,7 +659,8 @@ function updateBreath() {
   if (!ctx) return
   const now = ctx.currentTime
   const openSection = sectionIdx === 0 || sectionIdx === 3 ? 1.6 : 1
-  const target = body.breath > 0.15 ? Math.pow(body.breath, 1.6) * 0.16 * openSection : 0
+  // the breath only opens in real stillness, and grows slowly from there
+  const target = body.breath > 0.45 ? Math.pow((body.breath - 0.45) / 0.55, 1.4) * 0.16 * openSection : 0
   if (target > 0 && !breath) {
     const ac = ctx
     // the breath is the tone: air through a narrow resonator at the
@@ -1039,7 +1040,7 @@ export function strike(
     if (force > 0.35 && sectionIdx > 0) gu(force * 0.7, t0 + 0.052, x)
     luo(midi, force, t0 + 0.1, x, climax && force > 0.7)
     pluck(str, midi, 0.6 + force * 0.4, x, 0)
-    if (rapid >= 2 && sectionIdx >= 1) {
+    if (rapid >= 3 && sectionIdx >= 1) {
       // 轮指: the wheel turns faster with every fast punch and winds down
       // on its own — density as a rate, not a roll on a grid
       feedWheel(midi, 5 + rapid * 2.2, 0.35 + force * 0.5, x)

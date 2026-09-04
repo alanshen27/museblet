@@ -150,11 +150,14 @@ const NAMES: Record<string, number> = {
 }
 
 // speed, in shoulder widths per second, past which a hand is a fist
-export const PUNCH_SPEED = 2.4
+export const PUNCH_SPEED = 3.2
 // … and past which a rising knee / ankle / foot is a kick
-export const KICK_SPEED = 2.0
-const PUNCH_REFRACTORY = 240
-const KICK_REFRACTORY = 480
+export const KICK_SPEED = 2.8
+// a strike must come out of rest: the limb has to have been slower than
+// this since its last strike before it can fire again (a peak, not a wobble)
+const REARM_SPEED = 1.1
+const PUNCH_REFRACTORY = 320
+const KICK_REFRACTORY = 600
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 
@@ -191,6 +194,7 @@ export class SandaTracker {
   private shoulderY = 0
   private shoulderYSlow = 0
   private lastStrike: Record<string, number> = {}
+  private armed: Record<string, boolean> = { pL: true, pR: true, kL: true, kR: true }
   private punchTimes: number[] = []
   private lastAnyStrike = -Infinity
   private lastT = 0
@@ -329,7 +333,7 @@ export class SandaTracker {
     }
     this.snapNow = false
     if (
-      this.energyPeak > 0.42 &&
+      this.energyPeak > 0.58 &&
       this.energy < this.energyPeak * 0.2 &&
       prevEnergy >= this.energyPeak * 0.2 &&
       t - this.lastAnyStrike > 300 &&
@@ -431,12 +435,15 @@ export class SandaTracker {
       const tip = J(wi === LM.L_WRIST ? LM.L_INDEX : LM.R_INDEX)
       const hand = tip.vis > 0.4 && tip.speed > wrist.speed ? tip : wrist
       if (wrist.vis < 0.35) return
+      // re-arm only once the hand has come to rest
+      if (hand.speed < REARM_SPEED) this.armed[key] = true
+      if (!this.armed[key]) return
       if (t - (this.lastStrike[key] ?? -Infinity) < PUNCH_REFRACTORY) return
       const ext = this.elbowRate[ei] // rad/s, positive = opening
       // a fast hand, or a slightly slower one that is clearly an arm
       // snapping straight (the extension carries the intent)
       const fast = hand.speed >= PUNCH_SPEED
-      const snapping = hand.speed >= PUNCH_SPEED * 0.75 && ext > 5
+      const snapping = hand.speed >= PUNCH_SPEED * 0.8 && ext > 8
       if (!fast && !snapping) return
       // outward: travelling away from the shoulder (or straight across)
       const ox = hand.x - shoulder.x
@@ -445,6 +452,7 @@ export class SandaTracker {
       const outward = (hand.vx * ox + hand.vy * oy) / ol / (hand.speed || 1)
       if (outward < -0.2) return
       this.lastStrike[key] = t
+      this.armed[key] = false
       // drive: how much the body is behind the fist — hip/shoulder turn
       // and the arm's extension rate
       const drive = clamp(Math.abs(this.turn) * 0.6 + clamp(ext / 12, 0, 1) * 0.6, 0, 1)
@@ -482,6 +490,8 @@ export class SandaTracker {
       const knee = J(ki)
       const hip = J(hi)
       const foot = J(fi)
+      if (Math.max(ankle.speed, knee.speed, foot.speed) < REARM_SPEED) this.armed[key] = true
+      if (!this.armed[key]) return
       // a kick is read from whichever the tracking sees: the foot or ankle
       // whipping, or the knee driving up past the hip line
       const tipJ = foot.vis > 0.45 && foot.speed > ankle.speed ? foot : ankle
@@ -489,11 +499,12 @@ export class SandaTracker {
       const kneeKick =
         knee.vis > 0.45 &&
         knee.speed > KICK_SPEED &&
-        knee.vy < -KICK_SPEED * 0.45 &&
+        knee.vy < -KICK_SPEED * 0.5 &&
         knee.y < hip.y + sw * 0.9
       if (!footKick && !kneeKick) return
       const j = footKick ? tipJ : knee
       this.lastStrike[key] = t
+      this.armed[key] = false
       // a kick also silences the hands for a beat
       this.lastStrike.pL = this.lastStrike.pR = t
       const drive = clamp(this.root * 0.5 + Math.abs(this.lean) * 0.5, 0, 1)
