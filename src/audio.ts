@@ -26,6 +26,10 @@ let airDry: GainNode | null = null
 let widthDepth: GainNode | null = null
 let residue: AudioWorkletNode | null = null
 let residueGain: GainNode | null = null
+// the impact bus: everything that hits passes through a soft saturator so
+// weight reads as grit, not as level
+let impact: GainNode | null = null
+let impactDrive: WaveShaperNode | null = null
 let workletsReady = false
 let workletLoad: Promise<void> | null = null
 let scaleName = DEFAULT_SCALE
@@ -212,6 +216,27 @@ function getContext(): AudioContext {
   residueGain.connect(master)
   residueGain.connect(hallSend)
 
+  impact = ac.createGain()
+  impact.gain.value = 1
+  impactDrive = ac.createWaveShaper()
+  impactDrive.oversample = '2x'
+  const curve = new Float32Array(1024)
+  for (let i = 0; i < 1024; i++) {
+    const x = (i / 1023) * 2 - 1
+    curve[i] = Math.tanh(x * 2.2) / Math.tanh(2.2)
+  }
+  impactDrive.curve = curve
+  const impactLP = ac.createBiquadFilter()
+  impactLP.type = 'lowpass'
+  impactLP.frequency.value = 9000
+  impact.connect(impactDrive)
+  impactDrive.connect(impactLP)
+  impactLP.connect(master)
+  const impactHall = ac.createGain()
+  impactHall.gain.value = 0.5
+  impactLP.connect(impactHall)
+  impactHall.connect(hallSend)
+
   workletLoad = (async () => {
     try {
       const base = document.baseURI
@@ -305,23 +330,17 @@ export function sectionCue(index: number) {
       pluck('qin', root + 24, 0.5, 0.5, 0.4, true)
       break
     case 1:
-      pluck('qin', root + 7, 0.7, 0.4, 0)
-      pluck('qin', root + 12, 0.6, 0.6, 0.35)
-      pluck('pipa', root + 19, 0.5, 0.65, 0.7)
+      gu(0.5, t, 0.5, true)
+      pluck('qin', root + 12, 0.55, 0.5, 0.3)
       break
     case 2:
       ban(0.9, t, 0.5)
-      gu(0.9, t + 0.06, 0.5, true)
+      gu(0.95, t + 0.06, 0.5, true)
       luo(root, 1, t + 0.1, 0.5, true)
-      pluck('pipa', root + 24, 0.9, 0.5, 0.12)
-      pluck('pipa', root + 31, 0.8, 0.55, 0.2)
       break
     case 3:
       luo(root - 5, 0.8, t, 0.5, true)
-      pluck('qin', root + 14, 0.6, 0.5, 0.5)
-      pluck('qin', root + 12, 0.55, 0.5, 1.1)
-      pluck('qin', root + 7, 0.5, 0.5, 1.8)
-      pluck('qin', root, 0.6, 0.5, 2.6)
+      pluck('qin', root, 0.55, 0.5, 1.4, true)
       break
   }
 }
@@ -610,7 +629,7 @@ export function brushTo(
   // seized: the pitch is held where it is; the string can only be damped
   if (body.seize > 0.5 && !fresh) return
   const jump = Math.abs(midi - v.midi)
-  if (fresh || jump >= 5 || (jump >= 1 && now - v.lastUse > 0.7)) {
+  if (fresh) {
     // 起 is played in 泛音, the string's harmonics: thin, pure, brief
     pluckVoice(v, midi, clamp(0.3 + level * 0.7, 0, 1), x, now, sectionIdx === 0)
     return
@@ -628,10 +647,10 @@ export function brushTo(
 }
 
 /** an onset on a held brush voice: the speed integral crossed a threshold */
-export function brushOnset(slot: number, instr: 'qin' | 'pipa', midi: number, force: number, x: number) {
+export function brushOnset(slot: number, instr: 'qin' | 'pipa', midi: number, force: number, x: number, at = 0) {
   const ac = getContext()
   const v = allocString(instr, slot)
-  pluckVoice(v, midi, clamp(force, 0, 1), x, ac.currentTime, sectionIdx === 0)
+  pluckVoice(v, midi, clamp(force, 0, 1), x, ac.currentTime + at, sectionIdx === 0)
 }
 
 export function brushEnd(slot: number) {
@@ -839,6 +858,12 @@ export function erhuTo(midi: number, level: number, x: number, glideMs = 250) {
   erhu.lastT = now
 }
 
+/** the right hand bows the erhu: pitch from height, pressure from motion */
+export function bow(midi: number, speed: number, x: number) {
+  const level = clamp((speed - 0.5) / 2.2, 0, 1)
+  erhuTo(midi, 0.25 + level * 0.75, x, 220)
+}
+
 export function erhuEnd() {
   if (!erhu || !ctx) return
   const e = erhu
@@ -979,6 +1004,140 @@ function luo(midi: number, force: number, when: number, x = 0.5, big = false) {
   hiss.start(when)
 }
 
+// ------------------------------------------------------------- impact ---
+// Film-Foley impact: a crack transient, a flesh thud (闷响), a sub weight and
+// the room. Force is weight — lower thud, more sub, more drive, longer
+// decay — never more notes.
+function impactCell(kind: 'punch' | 'kick', force: number, when: number, x = 0.5) {
+  const ac = ctx!
+  const heavy = kind === 'kick'
+  const pan = ac.createStereoPanner()
+  pan.pan.value = (x - 0.5) * 0.9
+  const out = ac.createGain()
+  out.gain.value = (heavy ? 1.35 : 1.0) * (0.55 + force * 0.75)
+  out.connect(pan)
+  pan.connect(impact!)
+  // 1. crack: a very short bright noise transient — the snap of contact
+  const crack = ac.createBufferSource()
+  crack.buffer = noiseBuffer(ac, heavy ? 0.012 : 0.008, 1.2)
+  const cbp = ac.createBiquadFilter()
+  cbp.type = 'bandpass'
+  cbp.frequency.value = heavy ? 1400 : 2400
+  cbp.Q.value = 1.2
+  const cg = ac.createGain()
+  cg.gain.value = 0.55 * (0.6 + force * 0.6)
+  crack.connect(cbp)
+  cbp.connect(cg)
+  cg.connect(out)
+  crack.start(when)
+  // 2. thud: lowpassed noise body, darker with weight, plus a pitched drop
+  const thud = ac.createBufferSource()
+  thud.buffer = noiseBuffer(ac, heavy ? 0.16 : 0.09, 2.2)
+  const tlp = ac.createBiquadFilter()
+  tlp.type = 'lowpass'
+  tlp.frequency.setValueAtTime((heavy ? 520 : 760) - force * 220, when)
+  tlp.frequency.exponentialRampToValueAtTime(heavy ? 110 : 160, when + (heavy ? 0.16 : 0.09))
+  tlp.Q.value = 0.9
+  const tg = ac.createGain()
+  tg.gain.value = 0.9
+  thud.connect(tlp)
+  tlp.connect(tg)
+  tg.connect(out)
+  thud.start(when)
+  const drop = ac.createOscillator()
+  drop.type = 'sine'
+  drop.frequency.setValueAtTime(heavy ? 150 : 190, when)
+  drop.frequency.exponentialRampToValueAtTime(heavy ? 48 : 62, when + 0.045)
+  const dg = ac.createGain()
+  dg.gain.setValueAtTime(0.0001, when)
+  dg.gain.exponentialRampToValueAtTime(0.8, when + 0.003)
+  dg.gain.exponentialRampToValueAtTime(0.001, when + (heavy ? 0.28 : 0.16))
+  drop.connect(dg)
+  dg.connect(out)
+  drop.start(when)
+  drop.stop(when + 0.4)
+  // 3. sub: the weight of the body behind the blow
+  const sub = ac.createOscillator()
+  sub.type = 'sine'
+  sub.frequency.setValueAtTime(heavy ? 42 : 52, when)
+  sub.frequency.exponentialRampToValueAtTime(heavy ? 34 : 44, when + 0.3)
+  const sg = ac.createGain()
+  sg.gain.setValueAtTime(0.0001, when)
+  sg.gain.exponentialRampToValueAtTime((0.25 + force * 0.75) * (heavy ? 1.1 : 0.8), when + 0.008)
+  sg.gain.exponentialRampToValueAtTime(0.001, when + (heavy ? 0.7 : 0.4) + force * 0.3)
+  sub.connect(sg)
+  sg.connect(out)
+  sub.start(when)
+  sub.stop(when + 1.2)
+  // 4. the room: a short dark tail, more of it with weight
+  const tail = ac.createBufferSource()
+  tail.buffer = noiseBuffer(ac, 0.5, 3.5)
+  const tlp2 = ac.createBiquadFilter()
+  tlp2.type = 'lowpass'
+  tlp2.frequency.value = 900
+  const tg2 = ac.createGain()
+  tg2.gain.value = 0.12 + force * 0.2
+  tail.connect(tlp2)
+  tlp2.connect(tg2)
+  tg2.connect(hallSend!)
+  tail.start(when + 0.02)
+}
+
+// 蓄: the wind-up before a blow — a short breath drawn in, low and soft
+export function windup(x = 0.5) {
+  const ac = getContext()
+  const t = ac.currentTime
+  const src = ac.createBufferSource()
+  src.buffer = noiseBuffer(ac, 0.5, 0)
+  const bp = ac.createBiquadFilter()
+  bp.type = 'bandpass'
+  bp.Q.value = 1.4
+  bp.frequency.setValueAtTime(180, t)
+  bp.frequency.exponentialRampToValueAtTime(520, t + 0.3)
+  const g = ac.createGain()
+  g.gain.setValueAtTime(0.0001, t)
+  g.gain.exponentialRampToValueAtTime(0.07, t + 0.22)
+  g.gain.exponentialRampToValueAtTime(0.0005, t + 0.42)
+  const pan = ac.createStereoPanner()
+  pan.pan.value = (x - 0.5) * 0.8
+  src.connect(bp)
+  bp.connect(g)
+  g.connect(pan)
+  pan.connect(master!)
+  pan.connect(hallSend!)
+  src.start(t)
+}
+
+// the drum roll under a turning torso: density is a rate fed continuously
+const roll = { level: 0, next: 0, timer: 0 as ReturnType<typeof setInterval> | 0, lastFeed: 0 }
+export function feedRoll(level: number, x: number) {
+  const ac = getContext()
+  roll.level = clamp(level, 0, 1)
+  roll.lastFeed = ac.currentTime
+  ;(roll as { x?: number }).x = x
+  if (!roll.timer) {
+    roll.next = ac.currentTime + 0.01
+    roll.timer = setInterval(rollTick, 40)
+  }
+}
+function rollTick() {
+  const ac = ctx
+  if (!ac) return
+  const now = ac.currentTime
+  const idle = now - roll.lastFeed
+  const level = roll.level * Math.max(0, 1 - idle / 0.8)
+  if (level < 0.05) {
+    clearInterval(roll.timer)
+    roll.timer = 0
+    return
+  }
+  const rate = 5 + level * 9
+  while (roll.next < now + 0.12) {
+    gu(0.12 + level * 0.35, roll.next, (roll as { x?: number }).x ?? 0.5, level > 0.6)
+    roll.next += 1 / rate + (Math.random() - 0.5) * 0.02
+  }
+}
+
 /** scrub the recent past into falling debris */
 function residueBurst(force: number, at: number) {
   if (!residue) return
@@ -1033,34 +1192,29 @@ export function strike(
   const t0 = ac.currentTime + 0.005
   force = clamp(force, 0.15, 1) * SECTION_FORCE[sectionIdx]
   const climax = sectionIdx === 2
-  // in the close the fist speaks through the qin, not the pipa
-  const str: 'qin' | 'pipa' = sectionIdx === 3 ? 'qin' : 'pipa'
   if (kind === 'punch') {
-    ban(0.5 + force * 0.5, t0, x)
-    if (force > 0.35 && sectionIdx > 0) gu(force * 0.7, t0 + 0.052, x)
-    luo(midi, force, t0 + 0.1, x, climax && force > 0.7)
-    pluck(str, midi, 0.6 + force * 0.4, x, 0)
-    if (rapid >= 3 && sectionIdx >= 1) {
-      // 轮指: the wheel turns faster with every fast punch and winds down
-      // on its own — density as a rate, not a roll on a grid
-      feedWheel(midi, 5 + rapid * 2.2, 0.35 + force * 0.5, x)
-    }
-    residueBurst(force * 0.7 * (climax ? 1 : 0.5), 0.09)
+    // one blow: the Foley cell, and a 板 on top for the snap. Only a heavy
+    // blow rings the small gong; only a flurry in 转 turns the pipa wheel
+    impactCell('punch', force, t0, x)
+    ban(0.4 + force * 0.4, t0 + 0.004, x)
+    if (force > 0.62 && sectionIdx > 0) luo(midi, force * 0.8, t0 + 0.06, x, false)
+    if (rapid >= 3 && climax) feedWheel(midi, 6 + rapid * 2, 0.3 + force * 0.4, x)
+    residueBurst(force * 0.5, 0.1)
   } else {
-    gu(force, t0, x, true)
-    luo(midi - 12, force, t0 + 0.012, x, true)
-    pluck(str, midi + 12, 0.7 + force * 0.3, x, 0)
-    pluck(str, midi + 19, 0.5 + force * 0.3, x, 0.045)
-    if (climax) {
-      // 冲头: the clapper rushes, closing the gap into the second gong
-      let t = 0.24
+    // a kick lands with the whole body: heavy cell, the 大鼓, and the 大锣
+    // for a real one; 冲头 only at the climax
+    impactCell('kick', force, t0, x)
+    gu(force, t0 + 0.006, x, true)
+    if (force > 0.5) luo(midi - 12, force, t0 + 0.03, x, true)
+    if (climax && force > 0.7) {
+      let t = 0.26
       for (const gap of [0.13, 0.1, 0.075, 0.055, 0.045]) {
-        ban(0.55 * force, t0 + t, x)
+        ban(0.5 * force, t0 + t, x)
         t += gap
       }
-      luo(midi - 5, force * 0.7, t0 + t, x, false)
+      luo(midi - 5, force * 0.6, t0 + t, x, false)
     }
-    residueBurst(force, 0.12)
+    residueBurst(force * 0.8, 0.12)
   }
 }
 

@@ -111,6 +111,8 @@ export interface BodyState {
   seize: number
   /** 亮相: the body stopped dead after fast motion, this frame */
   snap: boolean
+  /** 蓄: a hand drawing in toward the body fast enough to be a wind-up, this frame */
+  windup: Side | null
   /** true while the whole body is under the expression floor: the room is silent */
   gated: boolean
   /** energy at the moment of the snap, 0..1 */
@@ -152,26 +154,26 @@ const NAMES: Record<string, number> = {
 }
 
 // speed, in shoulder widths per second, past which a hand is a fist
-export const PUNCH_SPEED = 3.2
+export const PUNCH_SPEED = 3.8
 // … and past which a rising knee / ankle / foot is a kick
-export const KICK_SPEED = 2.8
+export const KICK_SPEED = 3.4
 // a strike must come out of rest: the limb has to have been slower than
 // this since its last strike before it can fire again (a peak, not a wobble)
-const REARM_SPEED = 1.1
-const PUNCH_REFRACTORY = 320
-const KICK_REFRACTORY = 600
+const REARM_SPEED = 0.9
+const PUNCH_REFRACTORY = 450
+const KICK_REFRACTORY = 800
 // a strike is a peak *and a release*: the limb accelerates past the
 // threshold, peaks, and falls back below this fraction of its peak — only
 // then does it fire, with the peak as its force. Jitter never releases
 // after a real peak, and a hand waved about never falls back
 const RELEASE = 0.55
 // … and it must have travelled, in shoulder widths, since it left rest
-const PUNCH_TRAVEL = 0.45
-const KICK_TRAVEL = 0.4
+const PUNCH_TRAVEL = 0.55
+const KICK_TRAVEL = 0.5
 // a rising phase that lasts longer than this is a wave, not a strike
 const RISE_MAX_MS = 600
 // below this whole-body energy the room is silent: the expression floor
-export const EXPRESSION_FLOOR = 0.12
+export const EXPRESSION_FLOOR = 0.2
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 
@@ -204,6 +206,8 @@ export class SandaTracker {
   private peakT = 0
   private lastSnap = -Infinity
   private snapNow = false
+  private windupNow: Side | null = null
+  private lastWindup: Record<string, number> = {}
   private snapForce = 0
   private shoulderY = 0
   private shoulderYSlow = 0
@@ -245,6 +249,7 @@ export class SandaTracker {
     this.lastT = t
     const strikes: Strike[] = []
     this.snapNow = false
+    this.windupNow = null
     // a gap longer than a fifth of a second (a stalled tab, a starved
     // machine) tells us nothing about speed: take the positions, carry no
     // velocity, fire nothing
@@ -451,6 +456,24 @@ export class SandaTracker {
       this.elbowAngle[i] = a
     }
 
+    // ---- 蓄: the wind-up — a hand pulled back toward its shoulder --------
+    for (const [side, wi, si] of [
+      ['L', LM.L_WRIST, LM.L_SHOULDER],
+      ['R', LM.R_WRIST, LM.R_SHOULDER],
+    ] as const) {
+      const w = J(wi)
+      const sh = J(si)
+      if (w.vis < 0.4 || w.speed < 1.3 || w.speed > PUNCH_SPEED * 0.8) continue
+      const ox = sh.x - w.x
+      const oy = sh.y - w.y
+      const ol = Math.hypot(ox, oy) || 1
+      const inward = (w.vx * ox + w.vy * oy) / ol / w.speed
+      if (inward > 0.6 && this.energy > EXPRESSION_FLOOR * 0.7 && t - (this.lastWindup[side] ?? -Infinity) > 1500) {
+        this.lastWindup[side] = t
+        this.windupNow = side
+      }
+    }
+
     // ---- strikes ------------------------------------------------------
     const punch = (side: Side, wi: number, si: number, ei: number, key: string) => {
       const wrist = J(wi)
@@ -502,7 +525,8 @@ export class SandaTracker {
       const ol = Math.hypot(ox, oy) || 1
       const outward = (tx * ox + ty * oy) / ol / (Math.hypot(tx, ty) || 1)
       if (outward < -0.2) return
-      if (this.energy < EXPRESSION_FLOOR) return
+      // a strike carries its own evidence in the limb; it needs half the floor
+      if (this.energy < EXPRESSION_FLOOR * 0.5) return
       this.lastStrike[key] = t
       // drive: how much the body is behind the fist — hip/shoulder turn
       // and the arm's extension rate
@@ -573,7 +597,8 @@ export class SandaTracker {
       const ty = j.y - rest.y
       const travel = Math.hypot(tx / sw, ty / sw, j.z - rest.z)
       if (travel < KICK_TRAVEL) return
-      if (this.energy < EXPRESSION_FLOOR) return
+      // a strike carries its own evidence in the limb; it needs half the floor
+      if (this.energy < EXPRESSION_FLOOR * 0.5) return
       this.lastStrike[key] = t
       // a kick also silences the hands for a beat
       this.lastStrike.pL = this.lastStrike.pR = t
@@ -635,6 +660,7 @@ export class SandaTracker {
       seize: this.seize,
       snap: this.snapNow,
       snapForce: this.snapForce,
+      windup: this.windupNow,
       gated: this.energy < EXPRESSION_FLOOR,
       breath: this.breath,
       sw: this.sw,

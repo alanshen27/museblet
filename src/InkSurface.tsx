@@ -690,7 +690,7 @@ export default function InkSurface({
       const press = age < 140 ? 1.35 - 0.35 * (age / 140) : 1
       const fade = age > 4500 ? 1 - (age - 4500) / 2500 : 1
       const size = sl.size * S * press
-      const tall = sl.kind === 'kick'
+      const tall = sl.glyph.length > 1
       const sw = tall ? size * 0.62 : size
       const sh = tall ? size * 1.5 : size
       g.save()
@@ -956,7 +956,7 @@ export default function InkSurface({
           // brisk average over the whole of it
           const st = pointerState.current.get(e.pointerId)
           const dur = st ? Math.max(16, performance.now() - st.born) : Infinity
-          if (st && dur < 700 && st.path.length >= 2) {
+          if (st && st.path.length >= 2) {
             const a = st.path[0]
             const z = st.path[st.path.length - 1]
             const d = Math.hypot(z.x - a.x, z.y - a.y)
@@ -970,7 +970,8 @@ export default function InkSurface({
             }
             // …or simply a large displacement inside a short press, or a
             // single-move flick (two samples: a brush never looks like that)
-            if ((d > 0.04 && (avg > 0.45 || peak > 1.1)) || (d > 0.16 && dur < 900) || (st.path.length <= 3 && d > 0.12)) {
+            const quick = dur < 700
+            if ((quick && d > 0.04 && (avg > 0.45 || peak > 1.1)) || (d > 0.16 && dur < 900) || (st.path.length <= 3 && d > 0.12)) {
               strokeCancel(e.pointerId)
               const speed = Math.max(avg, peak * 0.6)
               onPointerStrikeRef.current?.({
