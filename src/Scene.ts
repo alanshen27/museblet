@@ -458,21 +458,9 @@ void main() {
 
   vec3 col = room(uv, fogUv, near, grain);
 
-  // ---- the shadow: one filled organic shape from the joints -----------
-  // only pixels the low-res field puts near the figure evaluate the full SDF
-  if (uFigOn == 1 && dBody < 0.06) {
-    vec2 fp = vec2(uv.x * aspect, uv.y);
-    float dF = sdFigure(fp);
-    float px = 0.0018;
-    float fill = 1.0 - smoothstep(-px, px, dF);
-    // contact: the mist darkens toward the figure
-    col *= 1.0 - 0.18 * exp(-max(dF, 0.0) * 90.0);
-    // the edge: a whisper of light at rest, cinnabar for the beat of a strike
-    vec3 rim = mix(uRimA, uRimB, uStrikeGlow);
-    float glow = exp(-max(dF, 0.0) * (260.0 - uStrikeGlow * 120.0)) * (1.0 - fill);
-    col += rim * glow * (0.06 + uEnergy * 0.12 + uStrikeGlow * 0.9) * (1.0 - paper * 0.6);
-    col = mix(col, mix(vec3(0.0), vec3(0.08), paper), fill);
-  }
+  // the joint field is the mist's body mask only — never drawn. The visible
+  // performer is the premade rig on the layer above. Here: a contact shadow.
+  if (uFigOn == 1) col *= 1.0 - 0.18 * exp(-max(dBody, 0.0) * 90.0);
 
   float vig = 1.0 - smoothstep(0.3, 0.95, length(q * vec2(1.0, 1.25))) * mix(0.6, 0.12, paper);
   col *= vig;

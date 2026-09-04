@@ -2,11 +2,11 @@
 // tracked joints, drawn flat black. The body's proportions are the asset's
 // bind pose; pose only moves bones — rotations only, no bone is scaled.
 //
-// Default asset: Mixamo's Michelle from the three.js examples
-// (`public/models/performer_michelle.glb`, an athletic build, `mixamorig`
-// skeleton); `?body=rpm` loads the examples' Ready Player Me avatar instead.
-// Any GLB with Mixamo-family bone names (with or without the `mixamorig:`
-// prefix) drops in.
+// Default asset: the three.js examples' Ready Player Me avatar
+// (`public/models/performer_rpm.glb`, Mixamo-named skeleton, a clean
+// short-haired head); `?body=michelle` loads Mixamo's Michelle instead
+// (athletic, but her hair buns read as ears in silhouette). Any GLB with
+// Mixamo-family bone names, with or without the `mixamorig:` prefix, drops in.
 //
 // The mesh is rendered as a coverage mask and composited as one black
 // shape with a soft edge; the only processing is a tiny morphological
@@ -23,7 +23,9 @@ const MODELS: Record<string, string> = {
   rpm: 'models/performer_rpm.glb',
   michelle: 'models/performer_michelle.glb',
 }
-const MODEL_URL = MODELS[new URLSearchParams(window.location.search).get('body') ?? ''] ?? MODELS.michelle
+const MODEL_URL = MODELS[new URLSearchParams(window.location.search).get('body') ?? ''] ?? MODELS.rpm
+// accessories that clutter a silhouette (the RPM avatar's hat/hair prop, beard, glasses)
+const ACCESSORY = /^Mesh$|Beard|Glasses|Hat|Headwear|Hair/i
 
 // screen-left is the mirrored subject's LEFT and the camera-facing
 // character's RIGHT, so subject-left landmarks drive Right* bones
@@ -134,8 +136,14 @@ export class Character {
   private rig = new THREE.Group()
   private bones = new Map<string, THREE.Bone>()
   private restDir = new Map<string, THREE.Vector3>()
+  // every bone's rest (bind-pose) local rotation, and the hips' rest world rotation:
+  // Mixamo rigs carry non-identity rest rotations, so all posing is relative
+  private restQ = new Map<string, THREE.Quaternion>()
+  private hipsRestWorldQ = new THREE.Quaternion()
+  // the rig's hip-joint midpoint at rest (anchored to the tracked hips) and
+  // its hip→ankle leg length (the fit measure: joint to joint on both sides)
   private hipsRest = new THREE.Vector3()
-  private modelTorso = 0.4
+  private modelLeg = 0.8
   private scaleS = 0
   private posS = new THREE.Vector3(0.5, 0.5, 0)
   private fade = 0
@@ -223,14 +231,19 @@ export class Character {
     model.traverse((o) => {
       const mesh = o as THREE.SkinnedMesh
       if (mesh.isMesh) {
-        // both of the rig's meshes (surface and the abdomen/joint shells)
-        // go into the coverage mask, so the torso is one continuous shape
+        if (ACCESSORY.test(mesh.name)) {
+          mesh.visible = false
+          return
+        }
+        // every body mesh (skin, clothes, head) goes into one coverage mask
         mesh.material = mask
         mesh.frustumCulled = false
       }
       if ((o as THREE.Bone).isBone) {
         const b = o as THREE.Bone
-        this.bones.set(b.name.replace(/^mixamorig:?/, ''), b)
+        const name = b.name.replace(/^mixamorig:?/, '')
+        this.bones.set(name, b)
+        this.restQ.set(name, b.quaternion.clone())
       }
     })
     this.rig.add(model)
@@ -242,14 +255,12 @@ export class Character {
       const sign = side === 'Left' ? -1 : 1
       for (const finger of ['Index', 'Middle', 'Ring', 'Pinky']) {
         const curl = [1.15, 1.45, 0.9]
-        for (let i = 1; i <= 3; i++) {
-          this.bones.get(`${side}Hand${finger}${i}`)?.quaternion.setFromEuler(new THREE.Euler(0, 0, sign * curl[i - 1]))
-        }
+        for (let i = 1; i <= 3; i++) this.poseRel(`${side}Hand${finger}${i}`, new THREE.Euler(0, 0, sign * curl[i - 1]))
       }
       // the thumb folds across the fingers
-      this.bones.get(`${side}HandThumb1`)?.quaternion.setFromEuler(new THREE.Euler(sign * 0.4, 0, sign * 0.35))
-      this.bones.get(`${side}HandThumb2`)?.quaternion.setFromEuler(new THREE.Euler(0, 0, sign * 0.6))
-      this.bones.get(`${side}HandThumb3`)?.quaternion.setFromEuler(new THREE.Euler(0, 0, sign * 0.5))
+      this.poseRel(`${side}HandThumb1`, new THREE.Euler(sign * 0.4, 0, sign * 0.35))
+      this.poseRel(`${side}HandThumb2`, new THREE.Euler(0, 0, sign * 0.6))
+      this.poseRel(`${side}HandThumb3`, new THREE.Euler(0, 0, sign * 0.5))
     }
     // rest directions: where each bone points at its child, in its local frame
     for (const a of AIMS) {
@@ -257,20 +268,33 @@ export class Character {
       if (c) this.restDir.set(a.bone, c.position.clone().normalize())
     }
     const hips = this.bones.get('Hips')
-    const la = this.bones.get('LeftArm')
-    const ra = this.bones.get('RightArm')
+    const lu = this.bones.get('LeftUpLeg')
+    const ru = this.bones.get('RightUpLeg')
+    const lf = this.bones.get('LeftFoot')
+    const rf = this.bones.get('RightFoot')
     this.rig.updateMatrixWorld(true)
-    if (hips) hips.getWorldPosition(this.hipsRest)
-    if (hips && la && ra) {
-      // the model's hip-to-shoulder length: the tracked torso scales it
-      const sh = la.getWorldPosition(new THREE.Vector3()).add(ra.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5)
-      this.modelTorso = this.hipsRest.distanceTo(sh)
-    }
+    if (hips) hips.getWorldQuaternion(this.hipsRestWorldQ)
+    if (lu && ru && lf && rf) {
+      // anchor at the hip joints' midpoint; fit by hip → ankle leg length —
+      // the same joints MediaPipe reports, unlike the pelvis bone
+      const wp = (b: THREE.Bone) => b.getWorldPosition(new THREE.Vector3())
+      this.hipsRest.copy(wp(lu)).add(wp(ru)).multiplyScalar(0.5)
+      this.modelLeg = (wp(lu).distanceTo(wp(lf)) + wp(ru).distanceTo(wp(rf))) / 2
+    } else if (hips) hips.getWorldPosition(this.hipsRest)
+    console.debug(`[character] ${MODEL_URL}: hip joints ${this.hipsRest.toArray().map((v) => v.toFixed(3)).join(',')} leg ${this.modelLeg.toFixed(3)} bones ${this.bones.size}`)
     this.ready = true
   }
 
   setTheme(paper: boolean) {
     this.uniforms.paper.value = paper ? 1 : 0
+  }
+
+  /** set a bone's local rotation relative to its rest rotation */
+  private poseRel(name: string, e: THREE.Euler) {
+    const b = this.bones.get(name)
+    const r0 = this.restQ.get(name)
+    if (!b || !r0) return
+    b.quaternion.copy(r0).multiply(new THREE.Quaternion().setFromEuler(e))
   }
 
   resize(w: number, h: number) {
@@ -321,10 +345,12 @@ export class Character {
     const hipMid = new THREE.Vector3().addVectors(P(LM.L_HIP, this.tA), P(LM.R_HIP, this.tB)).multiplyScalar(0.5)
     const shMid = new THREE.Vector3().addVectors(P(LM.L_SHOULDER, this.tA), P(LM.R_SHOULDER, this.tB)).multiplyScalar(0.5)
 
-    // fit: one uniform scale from the tracked torso length against the
-    // model's, smoothed slowly so the figure never pulses; the hips follow
-    // the tracked hips with damping
-    const s = Math.max(0.05, hipMid.distanceTo(shMid) / this.modelTorso)
+    // fit: one uniform scale from the tracked leg length (hip → ankle, the
+    // same joints on both sides) against the model's, smoothed slowly so the
+    // figure never pulses; the hips follow the tracked hips with damping
+    const legL = P(LM.L_HIP, this.tA).distanceTo(P(LM.L_ANKLE, this.tB))
+    const legR = P(LM.R_HIP, this.tA).distanceTo(P(LM.R_ANKLE, this.tB))
+    const s = Math.max(0.05, ((legL + legR) / 2) / this.modelLeg)
     this.scaleS = this.scaleS === 0 ? s : this.scaleS + (s - this.scaleS) * Math.min(1, dt * 0.8)
     this.posS.lerp(hipMid, Math.min(1, dt * 14))
     this.rig.scale.setScalar(this.scaleS)
@@ -346,12 +372,17 @@ export class Character {
         left.negate()
         fwd.negate()
       }
+      // new hips world = basis · rest world; expressed in the parent's frame
       this.tM.makeBasis(left, up, fwd)
-      hips.quaternion.setFromRotationMatrix(this.tM)
+      const B = this.tQ2.setFromRotationMatrix(this.tM)
+      const Pq = hips.parent ? hips.parent.getWorldQuaternion(this.tQ) : this.tQ.identity()
+      hips.quaternion.copy(Pq).invert().multiply(B).multiply(this.hipsRestWorldQ)
       hips.updateMatrixWorld(true)
     }
     for (const name of ['Spine', 'Spine1', 'Spine2', 'LeftShoulder', 'RightShoulder']) {
-      this.bones.get(name)?.quaternion.identity()
+      const b = this.bones.get(name)
+      const r0 = this.restQ.get(name)
+      if (b && r0) b.quaternion.copy(r0)
     }
     // limbs: aim each bone at the joint its child sits on
     for (const aim of AIMS) {
@@ -363,12 +394,15 @@ export class Character {
       const dir = this.tC.subVectors(to, from)
       if (dir.lengthSq() < 1e-8) continue
       dir.normalize()
+      const r0 = this.restQ.get(aim.bone)
+      if (!r0) continue
       const parentQ = bone.parent.getWorldQuaternion(this.tQ)
-      const restWorld = d0.clone().applyQuaternion(parentQ)
+      // where the child sits in world if this bone kept its rest rotation
+      const restWorld = d0.clone().applyQuaternion(r0).applyQuaternion(parentQ)
       const q = this.tQ2.setFromUnitVectors(restWorld, dir)
-      // bone.world = q · parent.world  ⇒  bone.local = parent⁻¹ · q · parent
+      // bone.world = q · parent · rest  ⇒  bone.local = parent⁻¹ · q · parent · rest
       const inv = this.tQ3.copy(parentQ).invert()
-      bone.quaternion.copy(inv).multiply(q).multiply(parentQ)
+      bone.quaternion.copy(inv).multiply(q).multiply(parentQ).multiply(r0)
       bone.updateMatrixWorld(true)
     }
     // head: yaw and pitch with the nose against the ears
@@ -379,8 +413,9 @@ export class Character {
       const earMid = this.tB.addVectors(P(LM.L_EAR, this.tC), P(LM.R_EAR, new THREE.Vector3())).multiplyScalar(0.5)
       const yaw = THREE.MathUtils.clamp(((nose.x - earMid.x) / (sw * aspect)) * 1.6, -0.9, 0.9)
       const pitch = THREE.MathUtils.clamp(((nose.y - earMid.y) / sw) * 1.2, -0.5, 0.5)
-      neck?.quaternion.identity()
-      head.quaternion.setFromEuler(new THREE.Euler(-pitch * 0.6, yaw, 0, 'YXZ'))
+      const nr = neck ? this.restQ.get('Neck') : undefined
+      if (neck && nr) neck.quaternion.copy(nr)
+      this.poseRel('Head', new THREE.Euler(-pitch * 0.6, yaw, 0, 'YXZ'))
     }
   }
 
