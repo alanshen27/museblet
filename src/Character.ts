@@ -61,30 +61,68 @@ void main() {
   vP = (modelMatrix * vec4(transformed, 1.0)).xyz;
 }`
 
-// the body: one flat ink. No lighting, no rim, no interior — a cutout
-const BODY_FRAG = `
-uniform float paper;
+// the body is drawn only as coverage
+const MASK_FRAG = `
+void main() { gl_FragColor = vec4(1.0); }`
+
+const POST_VERT = `
+varying vec2 vUv;
+void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`
+
+// disk sampling shared by the morphology passes: 16 directions × 2 rings
+const DISK = `
+uniform sampler2D tex;
+uniform vec2 texel;
+uniform float radius;
+varying vec2 vUv;
+float tapMax(float acc, vec2 o) { return max(acc, texture2D(tex, vUv + o).r); }
+float tapMin(float acc, vec2 o) { return min(acc, texture2D(tex, vUv + o).r); }
+#define RING(FN, ACC, R) for (int i = 0; i < 16; i++) { float a = float(i) * 0.39269908; ACC = FN(ACC, vec2(cos(a), sin(a)) * texel * (R)); }`
+
+const DILATE_FRAG = `${DISK}
 void main() {
-  gl_FragColor = vec4(mix(vec3(0.0), vec3(0.08, 0.08, 0.08), paper), 1.0);
+  float m = texture2D(tex, vUv).r;
+  RING(tapMax, m, radius)
+  RING(tapMax, m, radius * 0.5)
+  gl_FragColor = vec4(m);
 }`
 
-// the aura: an additive hull around the body, fading outward
-const AURA_FRAG = `
-uniform float energy, strike, paper;
-uniform vec3 rimA, rimB;
-varying vec3 vN;
-varying vec3 vV;
+const ERODE_FRAG = `${DISK}
 void main() {
-  vec3 n = normalize(vN);
-  vec3 v = normalize(vV);
-  // the hull sits behind the cutout: only its outer margin shows, as the
-  // edge of the paper glowing
-  float edge = 0.35 + 0.65 * pow(1.0 - abs(dot(n, v)), 2.0);
+  float m = texture2D(tex, vUv).r;
+  RING(tapMin, m, radius)
+  RING(tapMin, m, radius * 0.5)
+  gl_FragColor = vec4(m);
+}`
+
+// soft threshold and colour: the shadow, and its edge
+const COMPOSITE_FRAG = `
+uniform sampler2D tex;
+uniform vec2 texel;
+uniform float radius, energy, strike, paper;
+uniform vec3 rimA, rimB;
+varying vec2 vUv;
+void main() {
+  // a small blur of the closed mask gives a smooth, antialiased edge
+  float m = texture2D(tex, vUv).r * 0.25;
+  for (int i = 0; i < 12; i++) {
+    float a = float(i) * 0.5235988;
+    m += texture2D(tex, vUv + vec2(cos(a), sin(a)) * texel * radius).r * 0.0625;
+  }
+  // a wider blur for the glow outside the edge
+  float g = 0.0;
+  for (int i = 0; i < 16; i++) {
+    float a = float(i) * 0.39269908;
+    g += texture2D(tex, vUv + vec2(cos(a), sin(a)) * texel * radius * 5.0).r;
+  }
+  g /= 16.0;
+  float fill = smoothstep(0.42, 0.58, m);
+  vec3 ink = mix(vec3(0.0), vec3(0.08), paper);
   vec3 rim = mix(rimA, rimB, strike);
-  // the cutout is the image; the edge is a whisper at rest and only
-  // truly lights for the beat of a strike
-  float a = edge * (0.07 + energy * 0.12 + strike * 0.75) * (1.0 - paper * 0.6);
-  gl_FragColor = vec4(rim * a, a);
+  float glow = clamp(g - fill, 0.0, 1.0) * (0.07 + energy * 0.12 + strike * 0.85) * (1.0 - paper * 0.6);
+  vec3 col = ink * fill + rim * glow;
+  float alpha = clamp(fill + glow, 0.0, 1.0);
+  gl_FragColor = vec4(col, alpha);
 }`
 
 export class Character {
@@ -111,7 +149,16 @@ export class Character {
     rimA: { value: new THREE.Color(0.36, 0.8, 0.86) },
     rimB: { value: new THREE.Color(0.95, 0.36, 0.24) },
   }
-  private auraUniforms = { ...this.uniforms, push: { value: 0.009 } }
+  // screen-space smoothing of the coverage mask
+  private rtMask: THREE.WebGLRenderTarget | null = null
+  private rtA: THREE.WebGLRenderTarget | null = null
+  private rtB: THREE.WebGLRenderTarget | null = null
+  private postScene = new THREE.Scene()
+  private postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+  private postQuad: THREE.Mesh
+  private dilate: THREE.ShaderMaterial
+  private erode: THREE.ShaderMaterial
+  private composite: THREE.ShaderMaterial
   private canvas: HTMLCanvasElement
   private tA = new THREE.Vector3()
   private tB = new THREE.Vector3()
@@ -123,10 +170,34 @@ export class Character {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
+    const post = (frag: string) =>
+      new THREE.ShaderMaterial({
+        vertexShader: POST_VERT,
+        fragmentShader: frag,
+        uniforms: {
+          tex: { value: null },
+          texel: { value: new THREE.Vector2(1 / 1024, 1 / 1024) },
+          radius: { value: 8 },
+          energy: this.uniforms.energy,
+          strike: this.uniforms.strike,
+          paper: this.uniforms.paper,
+          rimA: this.uniforms.rimA,
+          rimB: this.uniforms.rimB,
+        },
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+      })
+    this.dilate = post(DILATE_FRAG)
+    this.erode = post(ERODE_FRAG)
+    this.composite = post(COMPOSITE_FRAG)
+    this.postQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.dilate)
+    this.postQuad.frustumCulled = false
+    this.postScene.add(this.postQuad)
     try {
-      this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true })
+      this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false })
       this.renderer.setClearColor(0x000000, 0)
-      this.renderer.outputColorSpace = THREE.SRGBColorSpace
+      this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace
     } catch (err) {
       console.warn('character renderer unavailable:', err)
       return
@@ -147,40 +218,20 @@ export class Character {
       console.warn('character model failed to load:', err)
       return
     }
-    const body = new THREE.ShaderMaterial({
-      vertexShader: SKIN_VERT,
-      fragmentShader: BODY_FRAG,
-      uniforms: this.uniforms,
-    })
-    const aura = new THREE.ShaderMaterial({
-      vertexShader: SKIN_VERT,
-      fragmentShader: AURA_FRAG,
-      uniforms: this.auraUniforms,
-      side: THREE.BackSide,
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    })
-    const hulls: THREE.Object3D[] = []
+    const mask = new THREE.ShaderMaterial({ vertexShader: SKIN_VERT, fragmentShader: MASK_FRAG, uniforms: this.uniforms })
     model.traverse((o) => {
       const mesh = o as THREE.SkinnedMesh
       if (mesh.isMesh) {
         // both of the rig's meshes (surface and the abdomen/joint shells)
-        // become the same flat ink, so the torso is one continuous shape
-        mesh.material = body
+        // go into the coverage mask, so the torso is one continuous shape
+        mesh.material = mask
         mesh.frustumCulled = false
-        const hull = mesh.clone()
-        hull.material = aura
-        hull.frustumCulled = false
-        hull.renderOrder = -1
-        hulls.push(hull)
       }
       if ((o as THREE.Bone).isBone) {
         const b = o as THREE.Bone
         this.bones.set(b.name.replace(/^mixamorig:?/, ''), b)
       }
     })
-    for (const h of hulls) model.add(h)
     this.rig.add(model)
     // fists: a martial silhouette has closed hands. Curl every phalanx toward
     // the palm once; fingers are not retargeted. In this rig's T-pose the
@@ -224,6 +275,21 @@ export class Character {
   resize(w: number, h: number) {
     if (!this.renderer) return
     this.renderer.setSize(w, h, false)
+    const mk = () =>
+      new THREE.WebGLRenderTarget(w, h, {
+        format: THREE.RGBAFormat,
+        type: THREE.UnsignedByteType,
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        depthBuffer: true,
+      })
+    this.rtMask?.dispose()
+    this.rtA?.dispose()
+    this.rtB?.dispose()
+    this.rtMask = mk()
+    this.rtA = mk()
+    this.rtB = mk()
+    for (const m of [this.dilate, this.erode, this.composite]) m.uniforms.texel.value.set(1 / w, 1 / h)
     this.camera.left = 0
     this.camera.right = w / h
     this.camera.top = 1
@@ -318,12 +384,41 @@ export class Character {
   }
 
   render() {
-    if (!this.renderer) return
-    if (this.fade < 0.01 || !this.ready) {
-      this.renderer.clear()
+    const r = this.renderer
+    if (!r) return
+    if (this.fade < 0.01 || !this.ready || !this.rtMask || !this.rtA || !this.rtB) {
+      r.setRenderTarget(null)
+      r.clear()
       return
     }
-    this.renderer.render(this.scene, this.camera)
+    const h = this.rtMask.height
+    // 1. the rig as coverage
+    r.setRenderTarget(this.rtMask)
+    r.setClearColor(0x000000, 1)
+    r.clear()
+    r.render(this.scene, this.camera)
+    // 2. close: dilate then erode with a radius of ~2.2% of the height —
+    //    fills concavities narrower than that (waist pinch, neck, joint gaps)
+    const close = h * 0.022
+    const pass = (mat: THREE.ShaderMaterial, src: THREE.WebGLRenderTarget, dst: THREE.WebGLRenderTarget | null, radius: number) => {
+      mat.uniforms.tex.value = src.texture
+      mat.uniforms.radius.value = radius
+      this.postQuad.material = mat
+      r.setRenderTarget(dst)
+      r.clear()
+      r.render(this.postScene, this.postCamera)
+    }
+    pass(this.dilate, this.rtMask, this.rtA, close)
+    pass(this.erode, this.rtA, this.rtB, close)
+    // 3. open: erode then dilate with a smaller radius — removes convex
+    //    bumps smaller than that (the ball joints' shoulders)
+    const open = h * 0.011
+    pass(this.erode, this.rtB, this.rtA, open)
+    pass(this.dilate, this.rtA, this.rtB, open)
+    // 4. soft threshold + glow, onto the transparent canvas
+    r.setClearColor(0x000000, 0)
+    pass(this.composite, this.rtB, null, h * 0.0025)
+    r.setRenderTarget(null)
     this.canvas.style.opacity = this.fade.toFixed(3)
   }
 }
