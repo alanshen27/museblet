@@ -65,7 +65,7 @@ void main() {
 const BODY_FRAG = `
 uniform float paper;
 void main() {
-  gl_FragColor = vec4(mix(vec3(0.012, 0.013, 0.018), vec3(0.09, 0.09, 0.09), paper), 1.0);
+  gl_FragColor = vec4(mix(vec3(0.0), vec3(0.08, 0.08, 0.08), paper), 1.0);
 }`
 
 // the aura: an additive hull around the body, fading outward
@@ -81,7 +81,9 @@ void main() {
   // edge of the paper glowing
   float edge = 0.35 + 0.65 * pow(1.0 - abs(dot(n, v)), 2.0);
   vec3 rim = mix(rimA, rimB, strike);
-  float a = edge * (0.28 + energy * 0.35 + strike * 0.6) * (1.0 - paper * 0.55);
+  // the cutout is the image; the edge is a whisper at rest and only
+  // truly lights for the beat of a strike
+  float a = edge * (0.07 + energy * 0.12 + strike * 0.75) * (1.0 - paper * 0.6);
   gl_FragColor = vec4(rim * a, a);
 }`
 
@@ -109,7 +111,7 @@ export class Character {
     rimA: { value: new THREE.Color(0.36, 0.8, 0.86) },
     rimB: { value: new THREE.Color(0.95, 0.36, 0.24) },
   }
-  private auraUniforms = { ...this.uniforms, push: { value: 0.012 } }
+  private auraUniforms = { ...this.uniforms, push: { value: 0.009 } }
   private canvas: HTMLCanvasElement
   private tA = new THREE.Vector3()
   private tB = new THREE.Vector3()
@@ -180,6 +182,23 @@ export class Character {
     })
     for (const h of hulls) model.add(h)
     this.rig.add(model)
+    // fists: a martial silhouette has closed hands. Curl every phalanx toward
+    // the palm once; fingers are not retargeted. In this rig's T-pose the
+    // left hand's fingers run +X with the palm down, so the curl is a
+    // negative turn about Z (positive for the right hand)
+    for (const side of ['Left', 'Right'] as const) {
+      const sign = side === 'Left' ? -1 : 1
+      for (const finger of ['Index', 'Middle', 'Ring', 'Pinky']) {
+        const curl = [1.15, 1.45, 0.9]
+        for (let i = 1; i <= 3; i++) {
+          this.bones.get(`${side}Hand${finger}${i}`)?.quaternion.setFromEuler(new THREE.Euler(0, 0, sign * curl[i - 1]))
+        }
+      }
+      // the thumb folds across the fingers
+      this.bones.get(`${side}HandThumb1`)?.quaternion.setFromEuler(new THREE.Euler(sign * 0.4, 0, sign * 0.35))
+      this.bones.get(`${side}HandThumb2`)?.quaternion.setFromEuler(new THREE.Euler(0, 0, sign * 0.6))
+      this.bones.get(`${side}HandThumb3`)?.quaternion.setFromEuler(new THREE.Euler(0, 0, sign * 0.5))
+    }
     // rest directions: where each bone points at its child, in its local frame
     for (const a of AIMS) {
       const c = this.bones.get(a.child)
