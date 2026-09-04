@@ -124,12 +124,19 @@ release**: out of rest (slower than 0.9 shoulder-widths/s since its last
 strike) the limb must exceed **3.8 sw/s** for a fist (3.0 with the elbow
 snapping straight) or **3.4 sw/s** for a foot/knee, then fall back below
 55 % of its peak within 600 ms, having travelled ≥ **0.55 / 0.5 sw** from
-where it rested (depth included); refractories **450 / 800 ms**. The whole
+where it rested (depth included); refractories **450 / 800 ms**. A punch
+must also travel **along the arm**: the speed-weighted cosine between the
+hand's velocity and the forearm axis (elbow → wrist, taken as the midpoint
+of the previous and current frame so a swing reads as perpendicular) must
+exceed **0.6** over the rise, and 0.45 at its start — a sideways flap or a
+chop across the arm is not a punch, however fast. The whole
 body must be above the expression floor (**0.2**; strikes need half of
 that, their limb being the evidence). Brushing needs a hand above the hips
-faster than **0.85 sw/s for 300 ms** *and* going somewhere (≥ 0.18 sw);
-the erhu bows only while the hand moves; the drum rolls only for a turn
-above 0.6 with the body over 0.3; the dizi opens only past 50 % stillness;
+moving at an easy pace — faster than **0.55 sw/s for 180 ms** and going
+somewhere (≥ 0.1 sw) — so the qin and the erhu are reachable without a
+fidget setting them off; the erhu bows only while the hand moves; the drum
+rolls only for a **deliberate spin** (turn rate above 0.75, held half a
+second, with the body clearly moving) — sway does nothing; the dizi opens only past 50 % stillness;
 the pipa wheel needs three fast fists in 转. Small displacements are
 smoothed hard so camera jitter never reads as speed. Tests: camera jitter,
 jitter plus a hand wiggle, heavy jitter, and **ten seconds of idle sway

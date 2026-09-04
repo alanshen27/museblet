@@ -72,6 +72,7 @@ export default function App() {
   const lastBodyRef = useRef<BodyState | null>(null)
   const lastStrikeRef = useRef(-Infinity)
   const rollOnRef = useRef(false)
+  const rollArmRef = useRef(0)
   const erhuMaxRef = useRef(0)
   // the phrase pulse: a slow breath of 2.4 s, its eighths (300 ms) the only
   // places a brush onset may fall — 散板 in feel, but never a random spray
@@ -324,14 +325,18 @@ export default function App() {
       }
       // a turning torso rolls the drum: density from the speed of the turn,
       // only with the body clearly in motion
-      if (b.turnRate > 0.6 && b.energy > 0.3 && b.sinceStrike > 500) {
+      // deliberate: the turn must be fast and held for half a second
+      if (b.turnRate > 0.75 && b.energy > 0.35 && b.sinceStrike > 500) {
+        if (!rollArmRef.current) rollArmRef.current = now
+      } else rollArmRef.current = 0
+      if (rollArmRef.current && now - rollArmRef.current > 500) {
         rollOnRef.current = true
         if (inMax) {
           if (now - erhuMaxRef.current > 220) {
             erhuMaxRef.current = now
             outletNote('gu', 45, Math.round(30 + b.turnRate * 70), 120)
           }
-        } else feedRoll(Math.min(1, (b.turnRate - 0.6) * 2.5), 0.5 + b.lean * 0.3)
+        } else feedRoll(Math.min(1, (b.turnRate - 0.75) * 4), 0.5 + b.lean * 0.3)
       } else rollOnRef.current = false
       // continuous control stream, ~20 Hz
       if (now - lastCtlSentRef.current > 50) {
@@ -400,7 +405,7 @@ export default function App() {
       if (!gateOpenRef.current) return
       if (!inMax && !isAwakened()) return
       const now = performance.now()
-      if (now - lastStrikeRef.current < 700) return // 收: the blow is still ringing
+      if (now - lastStrikeRef.current < 450) return // 收: the blow is still ringing
       const slot = slotOf(pointerId)
       let g = gest.current.get(pointerId)
       if (!g) {
@@ -650,9 +655,9 @@ export default function App() {
             <dl>
               <dt>stand still</dt>
               <dd>breath — the dizi opens on your out-breath at the tonal centre</dd>
-              <dt>left hand, raised, moving</dt>
+              <dt>left hand above the hips, moving at an easy pace</dt>
               <dd>the qin: one pluck when the gesture commits, then the string slides; a sharp reversal is a new stroke</dd>
-              <dt>right hand, raised, moving</dt>
+              <dt>right hand above the hips, moving at an easy pace</dt>
               <dd>the erhu: a bow — height is pitch, speed is pressure; it sounds only while the hand moves</dd>
               <dt>hand too slow, or a twitch</dt>
               <dd>silence</dd>
@@ -660,14 +665,14 @@ export default function App() {
               <dd>泛音 — the harmonics of the pitches you passed through</dd>
               <dt>a hand drawn back</dt>
               <dd>蓄 — a breath before the blow</dd>
-              <dt>fast fist, out of rest, then stopped</dt>
-              <dd>one blow: crack, thud, weight; a heavy one rings the small gong; three in a row at the climax turn the pipa wheel (轮指)</dd>
+              <dt>a punch — the fist driven straight out along the arm, then stopped</dt>
+              <dd>one blow: crack, thud, weight; a heavy one rings the small gong; three in a row at the climax turn the pipa wheel (轮指). Flaps and chops across the arm are not punches</dd>
               <dt>kick</dt>
               <dd>the heavy blow, the great drum, the great gong; the curtain tears</dd>
               <dt>stop dead after fast motion</dt>
               <dd>撕边一锣 — one gong, then nothing</dd>
-              <dt>turn the torso, and keep turning</dt>
-              <dd>the drum rolls, denser with the turn</dd>
+              <dt>spin the torso, fast, and keep it going</dt>
+              <dd>the drum rolls, denser with the turn — sway does nothing</dd>
               <dt>hands together at the chest</dt>
               <dd>the strings are damped, the pitch held</dd>
               <dt>stance width · crouch · guard up</dt>
