@@ -660,7 +660,7 @@ function updateBreath() {
   const now = ctx.currentTime
   const openSection = sectionIdx === 0 || sectionIdx === 3 ? 1.6 : 1
   // the breath only opens in real stillness, and grows slowly from there
-  const target = body.breath > 0.45 ? Math.pow((body.breath - 0.45) / 0.55, 1.4) * 0.16 * openSection : 0
+  const target = body.breath > 0.5 ? Math.pow((body.breath - 0.5) / 0.5, 1.4) * 0.16 * openSection : 0
   if (target > 0 && !breath) {
     const ac = ctx
     // the breath is the tone: air through a narrow resonator at the

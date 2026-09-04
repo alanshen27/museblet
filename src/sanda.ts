@@ -111,6 +111,8 @@ export interface BodyState {
   seize: number
   /** 亮相: the body stopped dead after fast motion, this frame */
   snap: boolean
+  /** true while the whole body is under the expression floor: the room is silent */
+  gated: boolean
   /** energy at the moment of the snap, 0..1 */
   snapForce: number
   /** shoulder width in screen fractions */
@@ -158,6 +160,18 @@ export const KICK_SPEED = 2.8
 const REARM_SPEED = 1.1
 const PUNCH_REFRACTORY = 320
 const KICK_REFRACTORY = 600
+// a strike is a peak *and a release*: the limb accelerates past the
+// threshold, peaks, and falls back below this fraction of its peak — only
+// then does it fire, with the peak as its force. Jitter never releases
+// after a real peak, and a hand waved about never falls back
+const RELEASE = 0.55
+// … and it must have travelled, in shoulder widths, since it left rest
+const PUNCH_TRAVEL = 0.45
+const KICK_TRAVEL = 0.4
+// a rising phase that lasts longer than this is a wave, not a strike
+const RISE_MAX_MS = 600
+// below this whole-body energy the room is silent: the expression floor
+export const EXPRESSION_FLOOR = 0.12
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 
@@ -195,6 +209,14 @@ export class SandaTracker {
   private shoulderYSlow = 0
   private lastStrike: Record<string, number> = {}
   private armed: Record<string, boolean> = { pL: true, pR: true, kL: true, kR: true }
+  private rise: Record<string, { peak: number; t0: number; ext: number } | null> = {
+    pL: null,
+    pR: null,
+    kL: null,
+    kR: null,
+  }
+  // where each striking limb last rested: travel is measured from here
+  private restPos: Record<string, { x: number; y: number; z: number }> = {}
   private punchTimes: number[] = []
   private lastAnyStrike = -Infinity
   private lastT = 0
@@ -290,13 +312,15 @@ export class SandaTracker {
           j.vis += (vis - j.vis) * 0.3
           continue
         }
-        const a = clamp(0.35 + (jump / sw) * 1.2, 0.35, 0.95)
+        // small jumps are mostly tracking noise: smooth them hard; a real
+        // move is followed nearly raw so an onset is not blurred away
+        const a = clamp(0.2 + (jump / sw) * 1.6, 0.2, 0.95)
         const nx = j.x + (rx - j.x) * a
         const ny = j.y + (ry - j.y) * a
         const vx = (nx - j.x) / dt / sw
         const vy = (ny - j.y) / dt / sw
-        j.vx += (vx - j.vx) * 0.55
-        j.vy += (vy - j.vy) * 0.55
+        j.vx += (vx - j.vx) * 0.45
+        j.vy += (vy - j.vy) * 0.45
         j.x = nx
         j.y = ny
         const nz = j.z + (rz - j.z) * 0.5
@@ -434,44 +458,70 @@ export class SandaTracker {
       // the hand tip reads a little ahead of the wrist; use the faster of the two
       const tip = J(wi === LM.L_WRIST ? LM.L_INDEX : LM.R_INDEX)
       const hand = tip.vis > 0.4 && tip.speed > wrist.speed ? tip : wrist
-      if (wrist.vis < 0.35) return
-      // re-arm only once the hand has come to rest
-      if (hand.speed < REARM_SPEED) this.armed[key] = true
-      if (!this.armed[key]) return
-      if (t - (this.lastStrike[key] ?? -Infinity) < PUNCH_REFRACTORY) return
+      if (wrist.vis < 0.35) {
+        this.rise[key] = null
+        return
+      }
+      // re-arm only once the hand has come to rest, and remember where
+      if (hand.speed < REARM_SPEED) {
+        this.armed[key] = true
+        this.restPos[key] = { x: hand.x, y: hand.y, z: hand.z }
+      }
       const ext = this.elbowRate[ei] // rad/s, positive = opening
-      // a fast hand, or a slightly slower one that is clearly an arm
-      // snapping straight (the extension carries the intent)
-      const fast = hand.speed >= PUNCH_SPEED
-      const snapping = hand.speed >= PUNCH_SPEED * 0.8 && ext > 8
-      if (!fast && !snapping) return
-      // outward: travelling away from the shoulder (or straight across)
+      const r = this.rise[key]
+      if (!r) {
+        // at rest: does the hand leave it fast enough to be a fist?
+        const fast = hand.speed >= PUNCH_SPEED
+        const snapping = hand.speed >= PUNCH_SPEED * 0.8 && ext > 8
+        if (this.armed[key] && (fast || snapping) && t - (this.lastStrike[key] ?? -Infinity) >= PUNCH_REFRACTORY) {
+          this.rise[key] = { peak: hand.speed, t0: t, ext: Math.max(0, ext) }
+        }
+        return
+      }
+      r.peak = Math.max(r.peak, hand.speed)
+      r.ext = Math.max(r.ext, ext)
+      if (t - r.t0 > RISE_MAX_MS) {
+        // held speed is a wave, not a strike
+        this.rise[key] = null
+        this.armed[key] = false
+        return
+      }
+      if (hand.speed > r.peak * RELEASE) return
+      // released: judge the whole gesture
+      this.rise[key] = null
+      this.armed[key] = false
+      const rest = this.restPos[key] ?? { x: hand.x, y: hand.y, z: hand.z }
+      const tx = hand.x - rest.x
+      const ty = hand.y - rest.y
+      // travel from rest, depth included (a jab at the lens barely moves on screen)
+      const travel = Math.hypot(tx / sw, ty / sw, hand.z - rest.z)
+      if (travel < PUNCH_TRAVEL) return
+      // outward: away from the shoulder (or straight across)
       const ox = hand.x - shoulder.x
       const oy = hand.y - shoulder.y
       const ol = Math.hypot(ox, oy) || 1
-      const outward = (hand.vx * ox + hand.vy * oy) / ol / (hand.speed || 1)
+      const outward = (tx * ox + ty * oy) / ol / (Math.hypot(tx, ty) || 1)
       if (outward < -0.2) return
+      if (this.energy < EXPRESSION_FLOOR) return
       this.lastStrike[key] = t
-      this.armed[key] = false
       // drive: how much the body is behind the fist — hip/shoulder turn
       // and the arm's extension rate
-      const drive = clamp(Math.abs(this.turn) * 0.6 + clamp(ext / 12, 0, 1) * 0.6, 0, 1)
-      const force = clamp((hand.speed - 1.6) / 5.5 + drive * 0.15, 0.15, 1)
+      const drive = clamp(Math.abs(this.turn) * 0.6 + clamp(r.ext / 12, 0, 1) * 0.6, 0, 1)
+      const force = clamp((r.peak - 1.6) / 5.5 + drive * 0.15, 0.15, 1)
       const confidence = clamp(
-        (0.45 + clamp((hand.speed - PUNCH_SPEED) / PUNCH_SPEED, -0.3, 0.4) + clamp(outward, 0, 1) * 0.15 + (snapping ? 0.1 : 0)) *
+        (0.45 + clamp((r.peak - PUNCH_SPEED) / PUNCH_SPEED, -0.3, 0.4) + clamp(outward, 0, 1) * 0.1 + clamp((travel - PUNCH_TRAVEL) * 0.3, 0, 0.15)) *
           clamp(wrist.vis, 0.35, 1),
         0.05,
         1,
       )
-      const m2 = Math.hypot(hand.vx, hand.vy)
+      const m2 = Math.hypot(tx, ty)
       strikes.push({
         kind: 'punch',
         side,
         x: hand.x,
         y: hand.y,
-        // a straight jab at the lens has little screen travel: burst upward
-        dx: m2 > 0.4 ? hand.vx / m2 : 0,
-        dy: m2 > 0.4 ? hand.vy / m2 : -1,
+        dx: m2 > 1e-4 ? tx / m2 : 0,
+        dy: m2 > 1e-4 ? ty / m2 : -1,
         force,
         t,
         drive,
@@ -485,43 +535,64 @@ export class SandaTracker {
     }
 
     const kick = (side: Side, ai: number, ki: number, hi: number, fi: number, key: string) => {
-      if (t - (this.lastStrike[key] ?? -Infinity) < KICK_REFRACTORY) return
       const ankle = J(ai)
       const knee = J(ki)
       const hip = J(hi)
       const foot = J(fi)
-      if (Math.max(ankle.speed, knee.speed, foot.speed) < REARM_SPEED) this.armed[key] = true
-      if (!this.armed[key]) return
       // a kick is read from whichever the tracking sees: the foot or ankle
       // whipping, or the knee driving up past the hip line
       const tipJ = foot.vis > 0.45 && foot.speed > ankle.speed ? foot : ankle
-      const footKick = tipJ.vis > 0.45 && tipJ.speed > KICK_SPEED * 1.3
-      const kneeKick =
-        knee.vis > 0.45 &&
-        knee.speed > KICK_SPEED &&
-        knee.vy < -KICK_SPEED * 0.5 &&
-        knee.y < hip.y + sw * 0.9
-      if (!footKick && !kneeKick) return
-      const j = footKick ? tipJ : knee
-      this.lastStrike[key] = t
+      const leg = Math.max(ankle.speed, knee.speed, foot.speed)
+      if (leg < REARM_SPEED) {
+        this.armed[key] = true
+        this.restPos[key] = { x: knee.x, y: knee.y, z: knee.z }
+        this.restPos[key + 'f'] = { x: tipJ.x, y: tipJ.y, z: tipJ.z }
+      }
+      const r = this.rise[key]
+      if (!r) {
+        const footKick = tipJ.vis > 0.45 && tipJ.speed > KICK_SPEED * 1.3
+        const kneeKick = knee.vis > 0.45 && knee.speed > KICK_SPEED && knee.vy < -KICK_SPEED * 0.5 && knee.y < hip.y + sw * 0.9
+        if (this.armed[key] && (footKick || kneeKick) && t - (this.lastStrike[key] ?? -Infinity) >= KICK_REFRACTORY) {
+          const j = footKick ? tipJ : knee
+          this.rise[key] = { peak: j.speed, t0: t, ext: footKick ? 1 : 0 }
+        }
+        return
+      }
+      const j = r.ext > 0.5 ? tipJ : knee
+      r.peak = Math.max(r.peak, j.speed)
+      if (t - r.t0 > RISE_MAX_MS) {
+        this.rise[key] = null
+        this.armed[key] = false
+        return
+      }
+      if (j.speed > r.peak * RELEASE) return
+      this.rise[key] = null
       this.armed[key] = false
+      const rest = this.restPos[r.ext > 0.5 ? key + 'f' : key] ?? { x: j.x, y: j.y, z: j.z }
+      const tx = j.x - rest.x
+      const ty = j.y - rest.y
+      const travel = Math.hypot(tx / sw, ty / sw, j.z - rest.z)
+      if (travel < KICK_TRAVEL) return
+      if (this.energy < EXPRESSION_FLOOR) return
+      this.lastStrike[key] = t
       // a kick also silences the hands for a beat
       this.lastStrike.pL = this.lastStrike.pR = t
+      this.rise.pL = this.rise.pR = null
       const drive = clamp(this.root * 0.5 + Math.abs(this.lean) * 0.5, 0, 1)
-      const force = clamp((j.speed - 1.4) / 5 + drive * 0.1, 0.3, 1)
+      const force = clamp((r.peak - 1.4) / 5 + drive * 0.1, 0.3, 1)
       const confidence = clamp(
-        (0.45 + clamp((j.speed - KICK_SPEED) / KICK_SPEED, -0.3, 0.4) + (footKick && kneeKick ? 0.15 : 0)) * clamp(j.vis, 0.35, 1),
+        (0.45 + clamp((r.peak - KICK_SPEED) / KICK_SPEED, -0.3, 0.4) + clamp((travel - KICK_TRAVEL) * 0.3, 0, 0.15)) * clamp(j.vis, 0.35, 1),
         0.05,
         1,
       )
-      const m2 = Math.hypot(j.vx, j.vy)
+      const m2 = Math.hypot(tx, ty)
       strikes.push({
         kind: 'kick',
         side,
         x: j.x,
         y: j.y,
-        dx: m2 > 0.4 ? j.vx / m2 : 0,
-        dy: m2 > 0.4 ? j.vy / m2 : -1,
+        dx: m2 > 1e-4 ? tx / m2 : 0,
+        dy: m2 > 1e-4 ? ty / m2 : -1,
         force,
         t,
         drive,
@@ -564,6 +635,7 @@ export class SandaTracker {
       seize: this.seize,
       snap: this.snapNow,
       snapForce: this.snapForce,
+      gated: this.energy < EXPRESSION_FLOOR,
       breath: this.breath,
       sw: this.sw,
       joints,

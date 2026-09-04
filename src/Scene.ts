@@ -57,6 +57,84 @@ const CAPSULES: [number, number, number, number][] = [
 ]
 const N_CAP = CAPSULES.length
 
+
+// ---- the figure as a 2D signed distance field ---------------------------
+// Built from the tracked joints alone: a rounded trunk spanning shoulders
+// and hips, deltoids, a neck, an elliptical head, tapered limb capsules and
+// closed fists — all joined by a smooth union so nothing reads as a ball
+// joint, a pinched waist or a sausage. Positions in aspect-corrected uv
+// (y up); radii in shoulder widths.
+const FIGURE_GLSL = `
+uniform vec2 uP[36];   // 33 joints + 33 shoulder-mid, 34 hip-mid, 35 head centre
+uniform float uSw;     // shoulder width, uv units
+uniform int uFigOn;
+float fsmin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+float sdCap(vec2 p, vec2 a, vec2 b, float ra, float rb) {
+  vec2 pa = p - a, ba = b - a;
+  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-7), 0.0, 1.0);
+  return length(pa - ba * h) - mix(ra, rb, h);
+}
+float sdEllipse(vec2 p, vec2 c, vec2 r) {
+  vec2 q = (p - c) / r;
+  float k = length(q);
+  return (k - 1.0) * min(r.x, r.y);
+}
+// convex quad a,b,c,d in order
+float sdQuad(vec2 p, vec2 a, vec2 b, vec2 c, vec2 d) {
+  vec2 v[4]; v[0] = a; v[1] = b; v[2] = c; v[3] = d;
+  float dd = dot(p - v[0], p - v[0]);
+  float sg = 1.0;
+  for (int i = 0; i < 4; i++) {
+    int j = (i + 3) % 4;
+    vec2 e = v[j] - v[i];
+    vec2 w = p - v[i];
+    vec2 bb = w - e * clamp(dot(w, e) / dot(e, e), 0.0, 1.0);
+    dd = min(dd, dot(bb, bb));
+    bvec3 cnd = bvec3(p.y >= v[i].y, p.y < v[j].y, e.x * w.y > e.y * w.x);
+    if (all(cnd) || all(not(cnd))) sg *= -1.0;
+  }
+  return sg * sqrt(dd);
+}
+float sdFigure(vec2 p) {
+  float s = uSw;
+  float k = s * 0.045;
+  vec2 LS = uP[11], RS = uP[12], LH = uP[23], RH = uP[24];
+  vec2 hipMid = uP[34], shMid = uP[33];
+  // an athletic trunk: full at the shoulders, drawn in at the waist. The
+  // quad's lower corners sit inside the hip joints, so the torso narrows
+  // toward the hips instead of barrelling
+  vec2 LHw = hipMid + (LH - hipMid) * 0.62;
+  vec2 RHw = hipMid + (RH - hipMid) * 0.62;
+  vec2 LSw = shMid + (LS - shMid) * 0.92;
+  vec2 RSw = shMid + (RS - shMid) * 0.92;
+  float d = sdQuad(p, LSw, RSw, RHw, LHw) - s * 0.07;
+  d = fsmin(d, length(p - LS) - s * 0.11, k);            // deltoids
+  d = fsmin(d, length(p - RS) - s * 0.11, k);
+  d = fsmin(d, length(p - LH) - s * 0.1, k);             // hips
+  d = fsmin(d, length(p - RH) - s * 0.1, k);
+  d = fsmin(d, sdCap(p, shMid, uP[35], s * 0.075, s * 0.07), k);  // neck
+  d = fsmin(d, sdEllipse(p, uP[35], vec2(s * 0.22, s * 0.27)), k); // head
+  // arms: upper, fore, fist — long and lean
+  d = fsmin(d, sdCap(p, LS, uP[13], s * 0.085, s * 0.065), k);
+  d = fsmin(d, sdCap(p, uP[13], uP[15], s * 0.065, s * 0.05), k);
+  d = fsmin(d, sdCap(p, uP[15], uP[19], s * 0.06, s * 0.06), k);
+  d = fsmin(d, sdCap(p, RS, uP[14], s * 0.085, s * 0.065), k);
+  d = fsmin(d, sdCap(p, uP[14], uP[16], s * 0.065, s * 0.05), k);
+  d = fsmin(d, sdCap(p, uP[16], uP[20], s * 0.06, s * 0.06), k);
+  // legs: thigh, shin, foot
+  d = fsmin(d, sdCap(p, LH, uP[25], s * 0.125, s * 0.085), k);
+  d = fsmin(d, sdCap(p, uP[25], uP[27], s * 0.085, s * 0.06), k);
+  d = fsmin(d, sdCap(p, uP[27], uP[31], s * 0.055, s * 0.05), k);
+  d = fsmin(d, sdCap(p, RH, uP[26], s * 0.125, s * 0.085), k);
+  d = fsmin(d, sdCap(p, uP[26], uP[28], s * 0.085, s * 0.06), k);
+  d = fsmin(d, sdCap(p, uP[28], uP[32], s * 0.055, s * 0.05), k);
+  return d;
+}
+`
+
 const FRAG = {
   copy: `${HEAD}
 uniform sampler2D uTexture;
@@ -107,6 +185,7 @@ uniform vec2 uSegR[${N_CAP}];  // ra rb (uv units)
 uniform vec3 uHead;            // x y r
 uniform vec2 uHeadV;
 uniform int uOn;
+${FIGURE_GLSL}
 void main() {
   if (uOn == 0) { fragColor = vec4(1.0, 0.0, 0.0, 0.0); return; }
   vec2 p = vUv; p.x *= aspectRatio;
@@ -120,8 +199,9 @@ void main() {
   }
   vec2 hp = uHead.xy; hp.x *= aspectRatio;
   float dh = length(p - hp) - uHead.z;
-  if (dh < best) { best = dh; vel = uHeadV; }
-  fragColor = vec4(best, vel, 1.0);
+  if (dh < best) { vel = uHeadV; }
+  // the distance itself comes from the figure the viewer sees
+  fragColor = vec4(sdFigure(p), vel, 1.0);
 }`,
 
   advection: `${HEAD}
@@ -236,7 +316,10 @@ uniform sampler2D uDye, uBody;
 uniform vec3 ground;
 uniform vec2 shake;
 uniform float time, flash, aspect, density, breath, lean, gate, section, paper;
+uniform float uEnergy, uStrikeGlow;
+uniform vec3 uRimA, uRimB;
 uniform int uBodyOn;
+${FIGURE_GLSL}
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p) {
@@ -375,8 +458,21 @@ void main() {
 
   vec3 col = room(uv, fogUv, near, grain);
 
-  // a soft contact shadow where the character stands in the mist
-  col *= 1.0 - 0.18 * exp(-max(dBody, 0.0) * 90.0) * float(uBodyOn);
+  // ---- the shadow: one filled organic shape from the joints -----------
+  // only pixels the low-res field puts near the figure evaluate the full SDF
+  if (uFigOn == 1 && dBody < 0.06) {
+    vec2 fp = vec2(uv.x * aspect, uv.y);
+    float dF = sdFigure(fp);
+    float px = 0.0018;
+    float fill = 1.0 - smoothstep(-px, px, dF);
+    // contact: the mist darkens toward the figure
+    col *= 1.0 - 0.18 * exp(-max(dF, 0.0) * 90.0);
+    // the edge: a whisper of light at rest, cinnabar for the beat of a strike
+    vec3 rim = mix(uRimA, uRimB, uStrikeGlow);
+    float glow = exp(-max(dF, 0.0) * (260.0 - uStrikeGlow * 120.0)) * (1.0 - fill);
+    col += rim * glow * (0.06 + uEnergy * 0.12 + uStrikeGlow * 0.9) * (1.0 - paper * 0.6);
+    col = mix(col, mix(vec3(0.0), vec3(0.08), paper), fill);
+  }
 
   float vig = 1.0 - smoothstep(0.3, 0.95, length(q * vec2(1.0, 1.25))) * mix(0.6, 0.12, paper);
   col *= vig;
@@ -493,6 +589,11 @@ export class Scene {
   private segR = new Float32Array(N_CAP * 2)
   private head = [0.5, 0.5, 0.05]
   private headV = [0, 0]
+  private pts = new Float32Array(36 * 2)
+  private swUv = 0.2
+  private energyS = 0
+  private strikeGlow = 0
+  private lastStrikeAt = -Infinity
   private mood: Mood = { density: 0.15, breath: 0, lean: 0, gate: 0, section: 0 }
   private paper = 0
   private moodS = { density: 0.15, breath: 0, lean: 0, gate: 0 }
@@ -628,6 +729,20 @@ export class Scene {
     const nose = all[0]
     const hx = nose.x
     const hy = nose.y - sw * 0.1
+    // joint positions for the figure field (aspect-corrected, y up)
+    const aspect = this.canvas.width / this.canvas.height
+    const P = this.pts
+    for (let i = 0; i < 33; i++) {
+      P[i * 2] = all[i].x * aspect
+      P[i * 2 + 1] = 1 - all[i].y
+    }
+    P[66] = ((ls.x + rs.x) / 2) * aspect
+    P[67] = 1 - (ls.y + rs.y) / 2
+    P[68] = ((lh.x + rh.x) / 2) * aspect
+    P[69] = 1 - (lh.y + rh.y) / 2
+    P[70] = hx * aspect
+    P[71] = 1 - hy
+    this.swUv = Math.max(0.02, Math.hypot((ls.x - rs.x) * aspect, ls.y - rs.y))
     this.head = [hx, 1 - hy, sw * 0.34]
     this.headV = [nose.vx * sw, -nose.vy * sw]
     // the 2D field segments (uv, y up) with velocities in uv/s
@@ -661,6 +776,12 @@ export class Scene {
     Object.assign(this.mood, m)
   }
 
+  /** the figure's energy (0..1) and the moment of a strike, for its edge */
+  setFigure(energy: number, sinceStrikeMs: number) {
+    this.energyS += (energy - this.energyS) * 0.15
+    this.lastStrikeAt = sinceStrikeMs
+  }
+
   /** the ink-stone (dark) or xuan paper (light) */
   setTheme(paper: boolean) {
     this.paper = paper ? 1 : 0
@@ -673,7 +794,10 @@ export class Scene {
     p.use()
     gl.uniform1f(p.u('aspectRatio'), this.canvas.width / this.canvas.height)
     gl.uniform1i(p.u('uOn'), this.bodyOn ? 1 : 0)
+    gl.uniform1i(p.u('uFigOn'), this.bodyOn ? 1 : 0)
     if (this.bodyOn) {
+      gl.uniform2fv(p.u('uP'), this.pts)
+      gl.uniform1f(p.u('uSw'), this.swUv)
       gl.uniform4fv(p.u('uSeg'), this.segs)
       gl.uniform4fv(p.u('uSegV'), this.segV)
       gl.uniform2fv(p.u('uSegR'), this.segR)
@@ -872,6 +996,18 @@ export class Scene {
     gl.uniform1f(p.u('section'), this.mood.section)
     gl.uniform1f(p.u('paper'), this.paper)
     gl.uniform1i(p.u('uBodyOn'), this.bodyOn ? 1 : 0)
+    gl.uniform1i(p.u('uFigOn'), this.bodyOn ? 1 : 0)
+    if (this.bodyOn) {
+      gl.uniform2fv(p.u('uP'), this.pts)
+      gl.uniform1f(p.u('uSw'), this.swUv)
+    }
+    // the strike flare decays over ~450 ms
+    const since = this.lastStrikeAt
+    this.strikeGlow = since < 450 ? 1 - since / 450 : 0
+    gl.uniform1f(p.u('uEnergy'), this.energyS)
+    gl.uniform1f(p.u('uStrikeGlow'), this.strikeGlow)
+    gl.uniform3f(p.u('uRimA'), 0.36, 0.8, 0.86)
+    gl.uniform3f(p.u('uRimB'), 0.95, 0.36, 0.24)
     this.blit(null)
   }
 }

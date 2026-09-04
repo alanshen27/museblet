@@ -25,7 +25,10 @@ export const RIGHT_HAND = 2001
 const BRUSH_MAX = PUNCH_SPEED * 0.7
 // …and faster than this: below it is a dead zone — small drift, tremor and
 // tracking noise lay down nothing
-const BRUSH_MIN = 0.5
+const BRUSH_MIN = 0.7
+// … and must have held that speed this long before a mark begins: a
+// deliberate movement, not a fidget
+const ARM_MS = 220
 // … and lets go after resting this long
 const REST_MS = 420
 
@@ -90,9 +93,9 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
     const modelName = MODEL_URLS[params.get('pose') ?? ''] ? (params.get('pose') as string) : 'full'
     setModel(modelName)
     const tracker = new SandaTracker(true)
-    const hands: Record<number, { brushing: boolean; restSince: number }> = {
-      [LEFT_HAND]: { brushing: false, restSince: 0 },
-      [RIGHT_HAND]: { brushing: false, restSince: 0 },
+    const hands: Record<number, { brushing: boolean; restSince: number; armSince: number; armX: number; armY: number }> = {
+      [LEFT_HAND]: { brushing: false, restSince: 0, armSince: 0, armX: 0, armY: 0 },
+      [RIGHT_HAND]: { brushing: false, restSince: 0, armSince: 0, armX: 0, armY: 0 },
     }
 
     const endBrush = (id: number) => {
@@ -123,7 +126,7 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
         return
       }
       const lines = [
-        `${ghost ? 'ghost performer' : `pose ${modelName}`} ${b.present ? 'tracking' : 'lost'}   phase ${b.phase}   section ${sectionRef.current} @ ${sectionSecRef.current.toFixed(1)}s   piece ${secondsRef.current.toFixed(1)}s`,
+        `${ghost ? 'ghost performer' : `pose ${modelName}`} ${b.present ? 'tracking' : 'lost'}   ${b.gated ? 'GATED (silent)' : 'open'}   phase ${b.phase}   section ${sectionRef.current} @ ${sectionSecRef.current.toFixed(1)}s   piece ${secondsRef.current.toFixed(1)}s`,
         `energy ${b.energy.toFixed(2)}  stillness ${b.stillness.toFixed(2)}  breath ${b.breath.toFixed(2)}`,
         `stance ${b.stance.toFixed(2)}  root ${b.root.toFixed(2)}  guard ${b.guard.toFixed(2)}  lean ${b.lean.toFixed(2)}  turn ${b.turn.toFixed(2)}`,
         `L wrist ${b.joints.lWrist?.speed.toFixed(1) ?? '-'}  R wrist ${b.joints.rWrist?.speed.toFixed(1) ?? '-'}  (punch > ${PUNCH_SPEED})`,
@@ -165,19 +168,33 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
         }
         if (j.speed > BRUSH_MAX) {
           endBrush(id)
+          h.armSince = 0
           continue
         }
         if (j.speed >= BRUSH_MIN) {
           h.restSince = 0
           if (!h.brushing) {
+            // the hand has to mean it: hold the speed a moment, and actually
+            // go somewhere — jitter is fast but goes nowhere
+            if (!h.armSince) {
+              h.armSince = now
+              h.armX = j.x
+              h.armY = j.y
+            }
+            if (now - h.armSince < ARM_MS) continue
+            if (Math.hypot(j.x - h.armX, j.y - h.armY) / b.sw < 0.12) {
+              h.armSince = 0
+              continue
+            }
             h.brushing = true
             surface.current?.strokeStart(id, instr, p)
           } else surface.current?.strokeMove(id, instr, p)
         } else if (h.brushing) {
+          h.armSince = 0
           if (!h.restSince) h.restSince = now
           if (now - h.restSince > REST_MS) endBrush(id)
           else surface.current?.strokeMove(id, instr, p)
-        }
+        } else h.armSince = 0
       }
     }
 

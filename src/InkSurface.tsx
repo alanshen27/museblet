@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef } from 'react'
 import type { Stroke } from './music'
 import { getInstrument, getTheme, INK, type Instrument } from './instruments'
 import { Scene, type Mood } from './Scene'
-import { Character } from './Character'
 import { FIGURE, type BodyState, type Joint, type Strike } from './sanda'
 
 export interface DrawPoint {
@@ -214,10 +213,8 @@ export default function InkSurface({
   handleRef,
 }: Props) {
   const glRef = useRef<HTMLCanvasElement>(null)
-  const charRef = useRef<HTMLCanvasElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const fluid = useRef<Scene | null>(null)
-  const character = useRef<Character | null>(null)
   const activeStrokes = useRef(new Map<number, Stroke>())
   const pointerState = useRef(
     new Map<number, { last: { x: number; y: number; t: number } | null; weight: number; speed: number; born: number; path: DrawPoint[]; times: number[] }>(),
@@ -375,13 +372,9 @@ export default function InkSurface({
           F.splat(p.x, p.y, (p.x - q.x) / dt * 0.2, (p.y - q.y) / dt * 0.2, [c[0] * 0.08, c[1] * 0.08, c[2] * 0.08], 0.012)
         }
       }
+      F.setFigure(b?.present ? b.energy : 0, b?.present ? b.sinceStrike : Infinity)
       F.step(dt)
       F.render()
-    }
-    // the character: the premade rig driven by the tracked joints
-    if (character.current) {
-      character.current.update(body.current, w / h, dt)
-      character.current.render()
     }
 
     g.setTransform(1, 0, 0, 1, 0, 0)
@@ -783,10 +776,8 @@ export default function InkSurface({
   useEffect(() => {
     const canvas = canvasRef.current
     const glc = glRef.current
-    const cc = charRef.current
-    if (!canvas || !glc || !cc) return
+    if (!canvas || !glc) return
     if (!fluid.current) fluid.current = new Scene(glc)
-    if (!character.current) character.current = new Character(cc)
     const resize = () => {
       const rect = canvas.getBoundingClientRect()
       const dpr = devicePixelRatio
@@ -796,7 +787,6 @@ export default function InkSurface({
       glc.width = Math.round(rect.width * Math.min(dpr, 1.5))
       glc.height = Math.round(rect.height * Math.min(dpr, 1.5))
       fluid.current?.resize()
-      character.current?.resize(Math.round(rect.width * Math.min(dpr, 2)), Math.round(rect.height * Math.min(dpr, 2)))
     }
     resize()
     const observer = new ResizeObserver(resize)
@@ -878,10 +868,7 @@ export default function InkSurface({
         fluid.current?.setMood({ gate: open ? 1 : 0 })
       },
       setMood: (m) => fluid.current?.setMood(m),
-      setTheme: (paper) => {
-        fluid.current?.setTheme(paper)
-        character.current?.setTheme(paper)
-      },
+      setTheme: (paper) => fluid.current?.setTheme(paper),
     }
     return () => {
       handleRef.current = null
@@ -923,7 +910,6 @@ export default function InkSurface({
   return (
     <div className="ink-surface">
       <canvas ref={glRef} className="ink-fluid" />
-      <canvas ref={charRef} className="ink-character" />
       <canvas
         ref={canvasRef}
         className="ink-marks"
@@ -961,8 +947,9 @@ export default function InkSurface({
               const dt = Math.max(8, st.times[i] - st.times[i - 2]) / 1000
               peak = Math.max(peak, Math.hypot(p1.x - p0.x, p1.y - p0.y) / dt)
             }
-            // …or simply a large displacement inside a short press
-            if ((d > 0.04 && (avg > 0.45 || peak > 1.1)) || (d > 0.16 && dur < 700)) {
+            // …or simply a large displacement inside a short press, or a
+            // single-move flick (two samples: a brush never looks like that)
+            if ((d > 0.04 && (avg > 0.45 || peak > 1.1)) || (d > 0.16 && dur < 900) || (st.path.length <= 3 && d > 0.12)) {
               strokeCancel(e.pointerId)
               const speed = Math.max(avg, peak * 0.6)
               onPointerStrikeRef.current?.({
