@@ -100,30 +100,37 @@ float sdQuad(vec2 p, vec2 a, vec2 b, vec2 c, vec2 d) {
 }
 float sdFigure(vec2 p) {
   float s = uSw;
-  float k = s * 0.06;
+  float k = s * 0.045;
   vec2 LS = uP[11], RS = uP[12], LH = uP[23], RH = uP[24];
-  // trunk: shoulders to hips, rounded, a little broader at the chest
-  float d = sdQuad(p, LS, RS, RH, LH) - s * 0.13;
-  d = fsmin(d, length(p - LS) - s * 0.15, k);            // deltoids
-  d = fsmin(d, length(p - RS) - s * 0.15, k);
-  d = fsmin(d, length(p - LH) - s * 0.15, k);            // hips rounded
-  d = fsmin(d, length(p - RH) - s * 0.15, k);
-  d = fsmin(d, sdCap(p, uP[33], uP[35], s * 0.11, s * 0.1), k);   // neck
-  d = fsmin(d, sdEllipse(p, uP[35], vec2(s * 0.31, s * 0.37)), k); // head
-  // arms: upper, fore, fist
-  d = fsmin(d, sdCap(p, LS, uP[13], s * 0.115, s * 0.09), k);
-  d = fsmin(d, sdCap(p, uP[13], uP[15], s * 0.09, s * 0.075), k);
-  d = fsmin(d, sdCap(p, uP[15], uP[19], s * 0.085, s * 0.08), k);
-  d = fsmin(d, sdCap(p, RS, uP[14], s * 0.115, s * 0.09), k);
-  d = fsmin(d, sdCap(p, uP[14], uP[16], s * 0.09, s * 0.075), k);
-  d = fsmin(d, sdCap(p, uP[16], uP[20], s * 0.085, s * 0.08), k);
+  vec2 hipMid = uP[34], shMid = uP[33];
+  // an athletic trunk: full at the shoulders, drawn in at the waist. The
+  // quad's lower corners sit inside the hip joints, so the torso narrows
+  // toward the hips instead of barrelling
+  vec2 LHw = hipMid + (LH - hipMid) * 0.62;
+  vec2 RHw = hipMid + (RH - hipMid) * 0.62;
+  vec2 LSw = shMid + (LS - shMid) * 0.92;
+  vec2 RSw = shMid + (RS - shMid) * 0.92;
+  float d = sdQuad(p, LSw, RSw, RHw, LHw) - s * 0.07;
+  d = fsmin(d, length(p - LS) - s * 0.11, k);            // deltoids
+  d = fsmin(d, length(p - RS) - s * 0.11, k);
+  d = fsmin(d, length(p - LH) - s * 0.1, k);             // hips
+  d = fsmin(d, length(p - RH) - s * 0.1, k);
+  d = fsmin(d, sdCap(p, shMid, uP[35], s * 0.075, s * 0.07), k);  // neck
+  d = fsmin(d, sdEllipse(p, uP[35], vec2(s * 0.22, s * 0.27)), k); // head
+  // arms: upper, fore, fist — long and lean
+  d = fsmin(d, sdCap(p, LS, uP[13], s * 0.085, s * 0.065), k);
+  d = fsmin(d, sdCap(p, uP[13], uP[15], s * 0.065, s * 0.05), k);
+  d = fsmin(d, sdCap(p, uP[15], uP[19], s * 0.06, s * 0.06), k);
+  d = fsmin(d, sdCap(p, RS, uP[14], s * 0.085, s * 0.065), k);
+  d = fsmin(d, sdCap(p, uP[14], uP[16], s * 0.065, s * 0.05), k);
+  d = fsmin(d, sdCap(p, uP[16], uP[20], s * 0.06, s * 0.06), k);
   // legs: thigh, shin, foot
-  d = fsmin(d, sdCap(p, LH, uP[25], s * 0.175, s * 0.125), k);
-  d = fsmin(d, sdCap(p, uP[25], uP[27], s * 0.125, s * 0.09), k);
-  d = fsmin(d, sdCap(p, uP[27], uP[31], s * 0.08, s * 0.065), k);
-  d = fsmin(d, sdCap(p, RH, uP[26], s * 0.175, s * 0.125), k);
-  d = fsmin(d, sdCap(p, uP[26], uP[28], s * 0.125, s * 0.09), k);
-  d = fsmin(d, sdCap(p, uP[28], uP[32], s * 0.08, s * 0.065), k);
+  d = fsmin(d, sdCap(p, LH, uP[25], s * 0.125, s * 0.085), k);
+  d = fsmin(d, sdCap(p, uP[25], uP[27], s * 0.085, s * 0.06), k);
+  d = fsmin(d, sdCap(p, uP[27], uP[31], s * 0.055, s * 0.05), k);
+  d = fsmin(d, sdCap(p, RH, uP[26], s * 0.125, s * 0.085), k);
+  d = fsmin(d, sdCap(p, uP[26], uP[28], s * 0.085, s * 0.06), k);
+  d = fsmin(d, sdCap(p, uP[28], uP[32], s * 0.055, s * 0.05), k);
   return d;
 }
 `
