@@ -9,6 +9,15 @@ ground, one red seal — and the musical language is Chinese: pentatonic
 modes, guqin space and decay, pipa attack, dizi breath, luogu impact, and
 留白, the silence that makes the strike land.
 
+**Default: a combat-sport performance.** Your round is the piece. Footwork
+is the band — a low ostinato that plays while you move and coasts when you
+stop; the guard is a held bed; punches are notes and blows (height is
+pitch, a hard one an octave up, a combination climbs the scale); kicks are
+the chorus hit (the great drum and gong and a chord leaping a register);
+a freeze ends the phrase; between bursts the breath comes in fast so a gap
+is never dead air. No form (taolu) is required — the brushwork below is an
+easter egg, not the way to melody.
+
 You appear as an energy silhouette — a premade humanoid rig driven by your
 joints — inside a living 山水: mountains of ridged ink, mist that parts
 around your body and swirls off a moving limb, water reflecting the peaks.
