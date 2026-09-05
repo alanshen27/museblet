@@ -10,8 +10,12 @@ import {
   brushTo,
   ensureAudio,
   erhuEnd,
+  feedBand,
   feedRoll,
   flageolets,
+  resolve,
+  setCentre,
+  setPad,
   snapPose,
   windup,
   gateComplete,
@@ -27,7 +31,7 @@ import {
 import { PerformanceForm, SECTION_INFO, SECTIONS, type FormState } from './performance'
 import { bindInlet, isMax, outletMessage, outletNote } from './max'
 import { DEFAULT_SCALE, MODE_GLYPH, SCALES, scaleDegree, strokesToNotes, type NoteEvent, type Stroke } from './music'
-import { chordAt } from './harmony'
+import { chordAt, stepInScale } from './harmony'
 import type { BodyState, Phase, Strike } from './sanda'
 import { emitStrike, onStrike, type StrikeEvent } from './strikes'
 import { getTheme, setTheme, type Theme } from './instruments'
@@ -240,8 +244,11 @@ export default function App() {
       const s: Strike = { kind: e.type, side: e.side, x: e.x, y: e.y, dx: e.dx, dy: e.dy, force: e.force, t: e.t, drive: 0, confidence: e.confidence }
       const rapid = e.rapid
       lastStrikeRef.current = e.t
-      // pitch from height: high strikes ring high
-      const midi = scaleDegree(1 - s.y, scaleRef.current, s.kind === 'kick' ? 43 : s.kind === 'snap' ? 50 : 55, 2)
+      // pitch from height: high strikes ring high. In a combination the
+      // blows climb the scale — a run, not a denser drum
+      const chain = s.kind === 'punch' ? Math.max(0, rapid - 1) : 0
+      const base = scaleDegree(1 - s.y, scaleRef.current, s.kind === 'kick' ? 43 : s.kind === 'snap' ? 50 : 55, 2)
+      const midi = chain ? stepInScale(base, Math.min(chain, 6), scaleRef.current) : base
       const vel = Math.round(40 + s.force * 87)
       surface.current?.strike(s, glyphFor(e))
       if (s.kind !== 'snap') {
@@ -285,8 +292,10 @@ export default function App() {
           }
           setTimeout(() => outletNote('luo', 50, Math.round(50 + s.force * 70), 4000), t)
         }
-      } else if (s.kind === 'snap') snapPose(s.force, s.x)
-      else audioStrike(s.kind, midi, s.force, s.x, rapid)
+      } else if (s.kind === 'snap') {
+        snapPose(s.force, s.x)
+        resolve()
+      } else audioStrike(s.kind, midi, s.force, s.x, rapid, chain)
     },
     [inMax],
   )
@@ -318,6 +327,16 @@ export default function App() {
       if (b.phase !== phaseRef.current) {
         phaseRef.current = b.phase
         setPhase(b.phase)
+      }
+      // combat grammar: the footwork is the band, the guard is the bed
+      if (!inMax) {
+        feedBand(b.footwork, 0.5 + b.lean * 0.3)
+        const lw = b.joints.lWrist
+        const rw = b.joints.rWrist
+        const shY = ((b.joints.lShoulder?.y ?? 0.4) + (b.joints.rShoulder?.y ?? 0.4)) / 2
+        const handsUp = [lw, rw].filter((w) => w && !w.held && w.vis > 0.4 && w.y < shY + b.sw * 0.4).length / 2
+        setPad(Math.max(b.guard, handsUp * 0.7), 0.5 + b.lean * 0.3)
+        if (b.seize > 0.6) resolve()
       }
       // 蓄: a hand drawn back is the breath before the blow
       if (b.windup && !b.gated && now - lastStrikeRef.current > 700) {
@@ -352,6 +371,7 @@ export default function App() {
           lean: b.lean,
           breathSignal: b.breath,
           seize: b.seize,
+          footwork: b.footwork,
         }
         setMeters({ stance: b.stance, root: b.root, breath: b.stillness, energy: b.energy })
         setGateState(b.gated ? (b.stillness >= 0.5 ? 'breath' : 'silent') : 'open')
@@ -415,7 +435,7 @@ export default function App() {
       if (!gateOpenRef.current) return
       if (!inMax && !isAwakened()) return
       const now = performance.now()
-      if (now - lastStrikeRef.current < 450) return // 收: the blow is still ringing
+      if (now - lastStrikeRef.current < 200) return // 收: a beat, at fight speed
       const slot = slotOf(pointerId)
       let g = gest.current.get(pointerId)
       if (!g) {
@@ -494,6 +514,7 @@ export default function App() {
       last = i
       const chord = chordAt(scaleRef.current, i, 48)
       breathPitch(chord[0] + 12)
+      setCentre(chord[0])
       if (inMax) outletMessage('centre', chord[0])
     }, 200)
     return () => clearInterval(id)
@@ -665,45 +686,43 @@ export default function App() {
         <section className="help" onClick={() => setHelp(false)}>
           <div className="help-card" onClick={(e) => e.stopPropagation()}>
             <h3>
-              <span className="cjk">拓</span> what each move does
+              <span className="cjk">拓</span> your round is the piece
             </h3>
             <p className="help-note">
-              Two kinds of sound. <b>Continuous</b> — the dizi, the qin, the erhu, the drum roll — play only while the movement that carries them is held, and stop when it stops.
-              <b> Strikes</b> — a punch, a kick, a snap to stillness — are single percussion hits: one gesture, one blow. Small movements do nothing.
+              Fight, and it plays. <b>Footwork</b> is the band, <b>guard</b> is the bed, <b>punches</b> are notes, <b>kicks</b> are the hits, a <b>freeze</b> ends the phrase.
+              Two kinds of sound: <b>continuous</b> layers that live only while the movement that carries them is held, and <b>strikes</b> — one gesture, one blow. Small movements do nothing.
             </p>
             <dl>
-              <dt className="help-group">continuous</dt>
+              <dt className="help-group">continuous — the band</dt>
               <dd />
-              <dt>stand still</dt>
-              <dd>breath — the dizi opens on your out-breath at the tonal centre</dd>
-              <dt>left hand above the hips, moving at an easy pace</dt>
-              <dd>the qin: one pluck when the gesture commits, then the string slides; a sharp reversal is a new stroke</dd>
-              <dt>right hand above the hips, moving at an easy pace</dt>
-              <dd>the erhu: a bow — height is pitch, speed is pressure; it sounds only while the hand moves</dd>
-              <dt>hand too slow, or a twitch</dt>
-              <dd>silence</dd>
-              <dt>close a loop</dt>
-              <dd>泛音 — the harmonics of the pitches you passed through</dd>
-              <dt className="help-group">strikes — one-shot percussion</dt>
+              <dt>footwork — bounce, shuffle, weight shift</dt>
+              <dd>the band: a soft drum on the pulse, the low string on the downbeats, a sub under it; it moves when you move and coasts when you stop</dd>
+              <dt>guard up (hands at the face or above the shoulders)</dt>
+              <dd>the bed: a held two-voice drone at the centre of the mode; drops when the hands drop</dd>
+              <dt>stand still between bursts</dt>
+              <dd>breath — the dizi comes in fast on your out-breath, so a gap is never dead air</dd>
+              <dt>spin the torso, fast, and keep it going</dt>
+              <dd>the drum rolls, denser with the turn — sway does nothing</dd>
+              <dt className="help-group">strikes — notes and hits</dt>
               <dd />
               <dt>a hand drawn back</dt>
               <dd>蓄 — a breath before the blow</dd>
-              <dt>a punch — the fist driven straight out along the arm, then stopped</dt>
-              <dd>one blow: crack, thud, weight; a heavy one rings the small gong; three in a row at the climax turn the pipa wheel (轮指). Flaps and chops across the arm are not punches</dd>
+              <dt>punch — the fist driven straight out along the arm, then stopped</dt>
+              <dd>one blow (crack, thud, weight) <i>and</i> a note: height is pitch, a hard blow an octave up, side is pan. Flaps and chops across the arm are not punches</dd>
+              <dt>combination — two or more punches inside 1.2 s</dt>
+              <dd>the notes climb the scale, a run; at the climax three in a row spin the pipa wheel (轮指)</dd>
               <dt>kick</dt>
-              <dd>the heavy blow, the great drum, the great gong; the curtain tears</dd>
-              <dt>stop dead after fast motion</dt>
-              <dd>撕边一锣 — one gong, then nothing</dd>
-              <dt>spin the torso, fast, and keep it going</dt>
-              <dd>the drum rolls, denser with the turn — sway does nothing</dd>
-              <dt>hands together at the chest</dt>
-              <dd>the strings are damped, the pitch held</dd>
+              <dd>the chorus hit: the heavy blow, the great drum, the great gong, and a chord leaping a register above the band; the curtain tears</dd>
+              <dt>freeze, clinch, 亮相</dt>
+              <dd>撕边一锣, the bed settles on the root, the band ducks — the phrase ends</dd>
               <dt className="help-group">the room (quiet, continuous)</dt>
               <dd />
-              <dt>stance width · crouch · guard up</dt>
-              <dd>stereo width · depth of the hall · the room darkens</dd>
+              <dt>stance width · crouch · lean</dt>
+              <dd>stereo width · depth of the hall · pan</dd>
               <dt>side-on to the camera</dt>
               <dd>the far arm is hidden and held where it was — face the camera a little more</dd>
+              <dt>a slow raised hand (left qin, right erhu)</dt>
+              <dd>the old brushwork is still there for anyone who wants it — the round does not need it</dd>
             </dl>
             <p className="help-keys">
               <b>H</b> help · <b>D</b> tracking view · <b>T</b> paper / stone · <b>P</b> loop the marks · <b>R</b> clear · <b>Enter</b> open the gate
@@ -724,15 +743,15 @@ export default function App() {
           </h2>
           <p className="gate-instruction">
             {bodySeen
-              ? 'stand. let the arms hang. hold still for a breath.'
+              ? 'stand. let the arms hang. hold still for a breath — then fight: your round is the piece.'
               : 'step back until the whole body is in frame — or hold the pointer.'}
           </p>
           <ul className="gate-legend">
-            <li><b>stand still</b> breath — the dizi</li>
-            <li><b>left hand, raised</b> the qin, one pluck per gesture</li>
-            <li><b>right hand, raised</b> the erhu, bowed by the hand</li>
-            <li><b>fast fist, then stop</b> one heavy blow</li>
-            <li><b>kick</b> drum and great gong</li>
+            <li><b>footwork</b> the band</li>
+            <li><b>guard up</b> the bed</li>
+            <li><b>punch</b> a note and a blow</li>
+            <li><b>kick</b> the hit</li>
+            <li><b>freeze</b> the phrase ends</li>
             <li><b>H</b> for the whole legend</li>
           </ul>
         </section>

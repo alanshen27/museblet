@@ -123,6 +123,8 @@ export interface BodyState {
   sw: number
   /** how side-on the body stands, 0 facing the camera .. 1 in profile */
   profile: number
+  /** footwork: bounce and weight shift of the lower body, 0..1 — the band's fuel */
+  footwork: number
   /** named joints for the mappings */
   joints: Record<string, Joint>
   /** all 33 joints, for the body renderers */
@@ -236,6 +238,7 @@ export class SandaTracker {
   private lastT = 0
   private missing = 0
   private profile = 0
+  private footwork = 0
   private prevWrist: Record<number, { x: number; y: number; z: number }> = {}
   private mirror: boolean
 
@@ -460,6 +463,20 @@ export class SandaTracker {
     }
     if (this.energy < 0.09) this.stillness = Math.min(1, this.stillness + dt / 2.2)
     else this.stillness = Math.max(0, this.stillness - dt * (0.8 + this.energy * 4))
+
+    // ---- footwork: the bounce of the hips and the shuffle of the feet ------
+    {
+      const lhJ = J(LM.L_HIP)
+      const rhJ = J(LM.R_HIP)
+      const laJ = J(LM.L_ANKLE)
+      const raJ = J(LM.R_ANKLE)
+      const hipV = Math.hypot((lhJ.vx + rhJ.vx) / 2, (lhJ.vy + rhJ.vy) / 2)
+      const feet = (laJ.vis > 0.4 ? Math.min(3, laJ.speed) : 0) + (raJ.vis > 0.4 ? Math.min(3, raJ.speed) : 0)
+      // a kick in flight is not footwork
+      const kicking = this.rise.kL !== null || this.rise.kR !== null
+      const fwRaw = kicking ? 0 : clamp((hipV * 1.1 + feet * 0.35) / 1.4, 0, 1)
+      this.footwork += (fwRaw - this.footwork) * 0.12
+    }
 
     // ---- stance / root / lean / turn / guard / breath -------------------
     const la = J(LM.L_ANKLE)
@@ -769,6 +786,7 @@ export class SandaTracker {
       breath: this.breath,
       sw: this.sw,
       profile: this.profile,
+      footwork: this.footwork,
       joints,
       all: this.all,
       strikes,

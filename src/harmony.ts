@@ -66,3 +66,23 @@ export function snapToScale(midi: number, scaleName: string): number {
   }
   return best
 }
+
+/** Walk `steps` scale degrees from a midi note (which is snapped first). */
+export function stepInScale(midi: number, steps: number, scaleName: string): number {
+  const scale = SCALES[scaleName] ?? SCALES[DEFAULT_SCALE]
+  const snapped = snapToScale(midi, scaleName)
+  const pc = ((snapped % 12) + 12) % 12
+  let idx = scale.indexOf(pc)
+  if (idx < 0) idx = 0
+  let octave = Math.floor(snapped / 12)
+  idx += steps
+  while (idx >= scale.length) {
+    idx -= scale.length
+    octave++
+  }
+  while (idx < 0) {
+    idx += scale.length
+    octave--
+  }
+  return octave * 12 + scale[idx]
+}

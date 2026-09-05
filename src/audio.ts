@@ -290,6 +290,8 @@ export interface BodyControls {
   breathSignal?: number
   /** clinch / seize 0..1 → strings muted at the node, pitch held */
   seize?: number
+  /** footwork 0..1 */
+  footwork?: number
 }
 
 // the piece's section (起承转合) shapes every macro below
@@ -354,6 +356,7 @@ const body: Required<BodyControls> = {
   lean: 0,
   breathSignal: 0,
   seize: 0,
+  footwork: 0,
 }
 
 export function setBody(c: BodyControls) {
@@ -679,7 +682,8 @@ function updateBreath() {
   const now = ctx.currentTime
   const openSection = sectionIdx === 0 || sectionIdx === 3 ? 1.6 : 1
   // the breath only opens in real stillness, and grows slowly from there
-  const target = body.breath > 0.5 ? Math.pow((body.breath - 0.5) / 0.5, 1.4) * 0.16 * openSection : 0
+  // between bursts the breath comes in quickly, so a gap is never dead air
+  const target = body.breath > 0.3 ? Math.pow((body.breath - 0.3) / 0.7, 1.2) * 0.16 * openSection : 0
   if (target > 0 && !breath) {
     const ac = ctx
     // the breath is the tone: air through a narrow resonator at the
@@ -734,7 +738,7 @@ function updateBreath() {
   // out-breath and closes on the in-breath; air pressure sets how much of
   // the tone is noise (more air, more breath, less core)
   const phrase = clamp(0.5 + body.breathSignal * 0.9, 0.05, 1)
-  breath.gain.gain.setTargetAtTime(target * phrase, now, 0.4)
+  breath.gain.gain.setTargetAtTime(target * phrase, now, 0.28)
   breath.air.gain.setTargetAtTime(1.4 + Math.max(0, body.breathSignal) * 1.6, now, 0.4)
   breath.core.gain.setTargetAtTime(0.38 - Math.max(0, body.breathSignal) * 0.2, now, 0.4)
   breath.bp.Q.setTargetAtTime(14 + (1 - Math.abs(body.breathSignal)) * 14, now, 0.4)
@@ -1004,6 +1008,154 @@ function luo(midi: number, force: number, when: number, x = 0.5, big = false) {
   hiss.start(when)
 }
 
+// ---------------------------------------------------------------- band ---
+// Combat grammar. The round is the piece: footwork is the band that never
+// stops while the body moves — a low ostinato on the phrase pulse (a soft
+// drum on the eighths, the low qin string on the downbeats, a sub drone
+// under it), its level and density fed by the bounce of the hips and feet.
+const band = { level: 0, x: 0.5, next: 0, k: 0, timer: 0 as ReturnType<typeof setInterval> | 0, lastFeed: 0, duck: 0 }
+let bandDrone: { osc: OscillatorNode; osc2: OscillatorNode; gain: GainNode; lp: BiquadFilterNode } | null = null
+let centreMidi = 45
+const PULSE = 0.3
+
+export function feedBand(level: number, x: number) {
+  const ac = getContext()
+  band.level = clamp(level, 0, 1)
+  band.x = x
+  band.lastFeed = ac.currentTime
+  if (!band.timer) {
+    band.next = ac.currentTime + 0.05
+    band.timer = setInterval(bandTick, 60)
+  }
+  ensureDrone()
+}
+
+function ensureDrone() {
+  const ac = ctx!
+  if (bandDrone) return
+  const osc = ac.createOscillator()
+  osc.type = 'sine'
+  const osc2 = ac.createOscillator()
+  osc2.type = 'triangle'
+  osc2.detune.value = 4
+  const lp = ac.createBiquadFilter()
+  lp.type = 'lowpass'
+  lp.frequency.value = 220
+  const gain = ac.createGain()
+  gain.gain.value = 0
+  osc.connect(lp)
+  osc2.connect(lp)
+  lp.connect(gain)
+  gain.connect(master!)
+  gain.connect(hallSend!)
+  osc.frequency.value = midiToFreq(centreMidi - 12)
+  osc2.frequency.value = midiToFreq(centreMidi - 12)
+  osc.start()
+  osc2.start()
+  bandDrone = { osc, osc2, gain, lp }
+}
+
+function bandTick() {
+  const ac = ctx
+  if (!ac) return
+  const now = ac.currentTime
+  const idle = now - band.lastFeed
+  // the band coasts a moment after the feet stop, then falls silent
+  const level = band.level * Math.max(0, 1 - idle / 1.6) * (1 - band.duck)
+  band.duck = Math.max(0, band.duck - 0.06)
+  if (bandDrone) bandDrone.gain.gain.setTargetAtTime(level * 0.09, now, 0.25)
+  if (level < 0.04) {
+    clearInterval(band.timer)
+    band.timer = 0
+    return
+  }
+  while (band.next < now + 0.14) {
+    const k = band.k++
+    const down = k % 4 === 0
+    const off = k % 2 === 1
+    // the drum: every eighth, the downbeat heavier, the off-eighths lighter
+    // and only when the band is really moving
+    if (!off || level > 0.45) gu(level * (down ? 0.5 : off ? 0.14 : 0.25), band.next + (off ? 0.012 : 0), band.x, down)
+    // the low string on the downbeat, the fifth two eighths later at speed
+    if (down) pluck('qin', centreMidi - 12, 0.25 + level * 0.45, band.x, band.next - now)
+    else if (k % 4 === 2 && level > 0.35) pluck('qin', centreMidi - 5, 0.2 + level * 0.3, band.x, band.next - now)
+    band.next += PULSE
+  }
+}
+
+// the guard: a held bed — two slow detuned voices and a breathy core at the
+// centre, rising while the hands stay up and dying when they drop
+let pad: { a: OscillatorNode; b: OscillatorNode; lp: BiquadFilterNode; gain: GainNode; lfo: OscillatorNode } | null = null
+export function setPad(level: number, x = 0.5) {
+  const ac = getContext()
+  const now = ac.currentTime
+  const target = clamp(level, 0, 1)
+  if (target > 0.05 && !pad) {
+    const a = ac.createOscillator()
+    a.type = 'sawtooth'
+    const b = ac.createOscillator()
+    b.type = 'sawtooth'
+    b.detune.value = 7
+    const lp = ac.createBiquadFilter()
+    lp.type = 'lowpass'
+    lp.frequency.value = 520
+    lp.Q.value = 0.8
+    const lfo = ac.createOscillator()
+    lfo.frequency.value = 0.17
+    const lfoG = ac.createGain()
+    lfoG.gain.value = 140
+    lfo.connect(lfoG)
+    lfoG.connect(lp.frequency)
+    const gain = ac.createGain()
+    gain.gain.value = 0
+    const p = ac.createStereoPanner()
+    p.pan.value = (x - 0.5) * 0.6
+    a.connect(lp)
+    b.connect(lp)
+    lp.connect(gain)
+    gain.connect(p)
+    p.connect(air!)
+    p.connect(hallSend!)
+    a.frequency.value = midiToFreq(centreMidi)
+    b.frequency.value = midiToFreq(centreMidi + 7)
+    a.start()
+    b.start()
+    lfo.start()
+    pad = { a, b, lp, gain, lfo }
+  }
+  if (!pad) return
+  // the bed arrives over half a second and leaves faster
+  pad.gain.gain.setTargetAtTime(target * 0.07, now, target > 0.05 ? 0.5 : 0.25)
+  if (target <= 0.02) {
+    const pd = pad
+    pad = null
+    pd.a.stop(now + 2)
+    pd.b.stop(now + 2)
+    pd.lfo.stop(now + 2)
+  }
+}
+
+/** the tonal centre moves: band drone and pad follow */
+export function setCentre(midi: number) {
+  centreMidi = midi
+  if (!ctx) return
+  const now = ctx.currentTime
+  bandDrone?.osc.frequency.setTargetAtTime(midiToFreq(midi - 12), now, 0.4)
+  bandDrone?.osc2.frequency.setTargetAtTime(midiToFreq(midi - 12), now, 0.4)
+  pad?.a.frequency.setTargetAtTime(midiToFreq(midi), now, 0.6)
+  pad?.b.frequency.setTargetAtTime(midiToFreq(midi + 7), now, 0.6)
+}
+
+// a freeze (亮相, a clinch): the phrase resolves — the pad settles on the
+// root, the band ducks for a beat
+export function resolve() {
+  if (!ctx) return
+  const now = ctx.currentTime
+  band.duck = 1
+  pad?.b.frequency.setTargetAtTime(midiToFreq(centreMidi), now, 0.3)
+  setTimeout(() => pad?.b.frequency.setTargetAtTime(midiToFreq(centreMidi + 7), ctx!.currentTime, 0.8), 1400)
+}
+
 // ------------------------------------------------------------- impact ---
 // Film-Foley impact: a crack transient, a flesh thud (闷响), a sub weight and
 // the room. Force is weight — lower thud, more sub, more drive, longer
@@ -1187,25 +1339,34 @@ export function strike(
   force: number,
   x: number,
   rapid: number,
+  chain = 0,
 ) {
   const ac = getContext()
   const t0 = ac.currentTime + 0.005
   force = clamp(force, 0.15, 1) * SECTION_FORCE[sectionIdx]
   const climax = sectionIdx === 2
   if (kind === 'punch') {
-    // one blow: the Foley cell, and a 板 on top for the snap. Only a heavy
-    // blow rings the small gong; only a flurry in 转 turns the pipa wheel
+    // one blow: the Foley cell and a 板 for the snap — and a note. Pitch
+    // from height, a hard blow an octave up; in a combination each blow
+    // climbs the scale (連击 as a run), and three in a row spin the wheel
     impactCell('punch', force, t0, x)
-    ban(0.4 + force * 0.4, t0 + 0.004, x)
-    if (force > 0.62 && sectionIdx > 0) luo(midi, force * 0.8, t0 + 0.06, x, false)
-    if (rapid >= 3 && climax) feedWheel(midi, 6 + rapid * 2, 0.3 + force * 0.4, x)
+    ban(0.35 + force * 0.4, t0 + 0.004, x)
+    const note = midi + (force > 0.75 ? 12 : 0)
+    pluck('pipa', note, 0.55 + force * 0.45, x, 0.008)
+    if (chain >= 1) pluck('qin', note - 12, 0.4 + force * 0.3, x, 0.02)
+    if (force > 0.62 && sectionIdx > 0) luo(midi, force * 0.7, t0 + 0.06, x, false)
+    if (rapid >= 3 && climax) feedWheel(note, 6 + rapid * 2, 0.3 + force * 0.4, x)
     residueBurst(force * 0.5, 0.1)
   } else {
-    // a kick lands with the whole body: heavy cell, the 大鼓, and the 大锣
-    // for a real one; 冲头 only at the climax
+    // a kick lands with the whole body — the chorus hit: the heavy cell, the
+    // 大鼓, the 大锣, and a chord leaping a register above the band
     impactCell('kick', force, t0, x)
     gu(force, t0 + 0.006, x, true)
-    if (force > 0.5) luo(midi - 12, force, t0 + 0.03, x, true)
+    if (force > 0.45) luo(midi - 12, force, t0 + 0.03, x, true)
+    pluck('qin', midi + 12, 0.7 + force * 0.3, x, 0.02)
+    pluck('qin', midi + 19, 0.55 + force * 0.3, x, 0.06)
+    pluck('pipa', midi + 24, 0.6 + force * 0.3, x, 0.1)
+    if (pad) pad.gain.gain.setTargetAtTime(0.14, t0, 0.05)
     if (climax && force > 0.7) {
       let t = 0.26
       for (const gap of [0.13, 0.1, 0.075, 0.055, 0.045]) {
