@@ -119,6 +119,17 @@ roll) exist only while their motion is clearly held.
 | **breath** (shoulders) | 气口: the dizi opens on the out-breath | — |
 | **stillness** | dizi breath at the tonal centre | marks fade to 留白 |
 
+**Occlusion.** MediaPipe invents a hanging arm for a limb it cannot see
+(the guard hand behind a side-on cross). The tracker never follows a
+low-confidence joint: below visibility 0.25 (0.5 for the far wrist when
+the body stands in profile) a joint **holds its last good position** and
+its velocity dies; a large jump is followed only when the limb is clearly
+seen again. A wrist that reads far below the hips, or farther from its
+shoulder than an arm can reach, while the body is busy, is restored and
+held. Held joints never brush or strike, and the silhouette inherits the
+held pose. The body scale falls back on torso height so a turned body does
+not inflate speeds; side-on, a quiet tip asks for a little more face.
+
 **Gating.** Small movements do nothing. A strike is a **peak and a
 release**: out of rest (slower than 0.9 shoulder-widths/s since its last
 strike) the limb must exceed **3.8 sw/s** for a fist (3.0 with the elbow
@@ -233,6 +244,17 @@ opens the gate. `D` shows the tracking view, `T` turns the sheet over
 (ink-stone ↔ xuan paper; `?theme=xuan`), `P` loops the marks on the
 surface 散板 — unquantised, x = time, y = pitch, length = duration — `R`
 clears. Sound starts on the first click or key (browser autoplay rules).
+
+**Occlusion.** MediaPipe invents a hanging arm for a limb it cannot see
+(the guard hand behind a side-on cross). The tracker never follows a
+low-confidence joint: below visibility 0.25 (0.5 for the far wrist when
+the body stands in profile) a joint **holds its last good position** and
+its velocity dies; a large jump is followed only when the limb is clearly
+seen again. A wrist that reads far below the hips, or farther from its
+shoulder than an arm can reach, while the body is busy, is restored and
+held. Held joints never brush or strike, and the silhouette inherits the
+held pose. The body scale falls back on torso height so a turned body does
+not inflate speeds; side-on, a quiet tip asks for a little more face.
 
 **Gating.** Small movements do nothing. A strike is a **peak and a
 release**: out of rest (slower than 1.1 shoulder-widths/s since the last

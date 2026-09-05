@@ -57,6 +57,8 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>('势')
   const [meters, setMeters] = useState({ stance: 0, root: 0, breath: 0, energy: 0 })
   const [gateState, setGateState] = useState<'silent' | 'breath' | 'open'>('silent')
+  const [profileTip, setProfileTip] = useState(false)
+  const profileSinceRef = useRef(0)
   const [gateOpen, setGateOpen] = useState(false)
   const [gateProgress, setGateProgress] = useState(0)
   const [bodySeen, setBodySeen] = useState(false)
@@ -353,6 +355,14 @@ export default function App() {
         }
         setMeters({ stance: b.stance, root: b.root, breath: b.stillness, energy: b.energy })
         setGateState(b.gated ? (b.stillness >= 0.5 ? 'breath' : 'silent') : 'open')
+        // side-on, the far arm is a guess: ask for a little more face
+        if (b.profile > 0.6) {
+          if (!profileSinceRef.current) profileSinceRef.current = now
+          if (now - profileSinceRef.current > 1200) setProfileTip(true)
+        } else {
+          profileSinceRef.current = 0
+          setProfileTip(false)
+        }
         if (inMax) {
           for (const [k, v] of Object.entries(ctl)) {
             const q = Math.round(v * 100) / 100
@@ -611,6 +621,12 @@ export default function App() {
         </div>
       )}
 
+      {profileTip && (
+        <div className="tip" role="status">
+          face the camera a little more — side-on, the far arm is hidden and held
+        </div>
+      )}
+
       <aside className={`phase phase-${phase}`} aria-live="polite">
         <span className="phase-glyph">{phase}</span>
         <span className="phase-word">
@@ -651,8 +667,13 @@ export default function App() {
             <h3>
               <span className="cjk">拓</span> what each move does
             </h3>
-            <p className="help-note">Small movements do nothing. Sound comes from stillness, from a raised slow hand, and from a real strike.</p>
+            <p className="help-note">
+              Two kinds of sound. <b>Continuous</b> — the dizi, the qin, the erhu, the drum roll — play only while the movement that carries them is held, and stop when it stops.
+              <b> Strikes</b> — a punch, a kick, a snap to stillness — are single percussion hits: one gesture, one blow. Small movements do nothing.
+            </p>
             <dl>
+              <dt className="help-group">continuous</dt>
+              <dd />
               <dt>stand still</dt>
               <dd>breath — the dizi opens on your out-breath at the tonal centre</dd>
               <dt>left hand above the hips, moving at an easy pace</dt>
@@ -663,6 +684,8 @@ export default function App() {
               <dd>silence</dd>
               <dt>close a loop</dt>
               <dd>泛音 — the harmonics of the pitches you passed through</dd>
+              <dt className="help-group">strikes — one-shot percussion</dt>
+              <dd />
               <dt>a hand drawn back</dt>
               <dd>蓄 — a breath before the blow</dd>
               <dt>a punch — the fist driven straight out along the arm, then stopped</dt>
@@ -675,8 +698,12 @@ export default function App() {
               <dd>the drum rolls, denser with the turn — sway does nothing</dd>
               <dt>hands together at the chest</dt>
               <dd>the strings are damped, the pitch held</dd>
+              <dt className="help-group">the room (quiet, continuous)</dt>
+              <dd />
               <dt>stance width · crouch · guard up</dt>
-              <dd>stereo width · depth of the hall · the room darkens (quiet, continuous)</dd>
+              <dd>stereo width · depth of the hall · the room darkens</dd>
+              <dt>side-on to the camera</dt>
+              <dd>the far arm is hidden and held where it was — face the camera a little more</dd>
             </dl>
             <p className="help-keys">
               <b>H</b> help · <b>D</b> tracking view · <b>T</b> paper / stone · <b>P</b> loop the marks · <b>R</b> clear · <b>Enter</b> open the gate
