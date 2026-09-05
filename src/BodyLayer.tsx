@@ -89,6 +89,7 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
     let ghost = false
     let ghostSince = 0
     let ghostLast = 0
+    let fps = 0
     const params = new URLSearchParams(window.location.search)
     const wantDemo = params.has('demo')
     const modelName = MODEL_URLS[params.get('pose') ?? ''] ? (params.get('pose') as string) : 'full'
@@ -127,7 +128,7 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
         return
       }
       const lines = [
-        `${ghost ? 'ghost performer' : `pose ${modelName}`} ${b.present ? 'tracking' : 'lost'}   ${b.gated ? 'GATED (silent)' : 'open'}   profile ${b.profile.toFixed(2)}   held ${b.all.filter((j) => j.held).length}   phase ${b.phase}   section ${sectionRef.current} @ ${sectionSecRef.current.toFixed(1)}s   piece ${secondsRef.current.toFixed(1)}s`,
+        `${ghost ? 'ghost performer' : `pose ${modelName}`} ${b.present ? 'tracking' : 'lost'}   ${b.gated ? 'GATED (silent)' : 'open'}   profile ${b.profile.toFixed(2)}   held ${b.all.filter((j) => j.held).length}   phase ${b.phase}   section ${sectionRef.current} @ ${sectionSecRef.current.toFixed(1)}s   piece ${secondsRef.current.toFixed(1)}s   ${fps.toFixed(0)} fps${fps > 0 && fps < 6 ? ' STARVED' : ''}`,
         `energy ${b.energy.toFixed(2)}  stillness ${b.stillness.toFixed(2)}  breath ${b.breath.toFixed(2)}`,
         `stance ${b.stance.toFixed(2)}  root ${b.root.toFixed(2)}  guard ${b.guard.toFixed(2)}  lean ${b.lean.toFixed(2)}  turn ${b.turn.toFixed(2)}`,
         `L wrist ${b.joints.lWrist?.speed.toFixed(1) ?? '-'}  R wrist ${b.joints.rWrist?.speed.toFixed(1) ?? '-'}  (punch > ${PUNCH_SPEED})`,
@@ -247,9 +248,14 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
     }
 
     let lastVideoTime = -1
+    let lastLoop = 0
     const loop = () => {
       if (stopped) return
       const now = performance.now()
+      // the loop's own rate, for the tracking view: a starved page (under
+      // ~5 fps) reads every frame as stalled and can land nothing
+      if (lastLoop) fps = fps + (1000 / Math.max(1, now - lastLoop) - fps) * 0.1
+      lastLoop = now
       if (ghost) {
         // the ghost performer: before the gate opens it stands and
         // breathes, so the gate opens itself; then it plays the piece
