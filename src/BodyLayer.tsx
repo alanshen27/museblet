@@ -126,7 +126,7 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
         return
       }
       const lines = [
-        `${ghost ? 'ghost performer' : `pose ${modelName}`} ${b.present ? 'tracking' : 'lost'}   ${b.gated ? 'GATED (silent)' : 'open'}   phase ${b.phase}   section ${sectionRef.current} @ ${sectionSecRef.current.toFixed(1)}s   piece ${secondsRef.current.toFixed(1)}s`,
+        `${ghost ? 'ghost performer' : `pose ${modelName}`} ${b.present ? 'tracking' : 'lost'}   ${b.gated ? 'GATED (silent)' : 'open'}   profile ${b.profile.toFixed(2)}   held ${b.all.filter((j) => j.held).length}   phase ${b.phase}   section ${sectionRef.current} @ ${sectionSecRef.current.toFixed(1)}s   piece ${secondsRef.current.toFixed(1)}s`,
         `energy ${b.energy.toFixed(2)}  stillness ${b.stillness.toFixed(2)}  breath ${b.breath.toFixed(2)}`,
         `stance ${b.stance.toFixed(2)}  root ${b.root.toFixed(2)}  guard ${b.guard.toFixed(2)}  lean ${b.lean.toFixed(2)}  turn ${b.turn.toFixed(2)}`,
         `L wrist ${b.joints.lWrist?.speed.toFixed(1) ?? '-'}  R wrist ${b.joints.rWrist?.speed.toFixed(1) ?? '-'}  (punch > ${PUNCH_SPEED})`,
@@ -156,7 +156,7 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
         const j = b.joints[name]
         const h = hands[id]
         const struck = b.strikes.some((s) => s.kind === 'kick' || s.side === (id === LEFT_HAND ? 'L' : 'R'))
-        if (!j || j.vis < 0.45 || !openRef.current || struck || j.y > hipY) {
+        if (!j || j.vis < 0.45 || j.held || !openRef.current || struck || j.y > hipY) {
           endBrush(id)
           continue
         }

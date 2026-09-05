@@ -84,6 +84,8 @@ export interface Joint {
   /** speed in shoulder-widths per second, depth included */
   speed: number
   vis: number
+  /** true while the tracker is holding this joint's last good position (occluded / not trusted) */
+  held: boolean
 }
 
 export interface BodyState {
@@ -119,6 +121,8 @@ export interface BodyState {
   snapForce: number
   /** shoulder width in screen fractions */
   sw: number
+  /** how side-on the body stands, 0 facing the camera .. 1 in profile */
+  profile: number
   /** named joints for the mappings */
   joints: Record<string, Joint>
   /** all 33 joints, for the body renderers */
@@ -231,6 +235,8 @@ export class SandaTracker {
   private lastAnyStrike = -Infinity
   private lastT = 0
   private missing = 0
+  private profile = 0
+  private prevWrist: Record<number, { x: number; y: number; z: number }> = {}
   private mirror: boolean
 
   constructor(mirror = true) {
@@ -272,12 +278,29 @@ export class SandaTracker {
     this.missing = 0
 
     const sx = (p: PoseLM) => (this.mirror ? 1 - p.x : p.x)
-    const swRaw = Math.hypot(
+    const shoulderDist = Math.hypot(
       lm[LM.L_SHOULDER].x - lm[LM.R_SHOULDER].x,
       lm[LM.L_SHOULDER].y - lm[LM.R_SHOULDER].y,
     )
+    // the body scale must survive a turn: side-on, the shoulders collapse
+    // in the image, so fall back on the torso height (≈ 1.3 shoulder widths)
+    const torsoImg = Math.hypot(
+      (lm[LM.L_SHOULDER].x + lm[LM.R_SHOULDER].x - lm[LM.L_HIP].x - lm[LM.R_HIP].x) / 2,
+      (lm[LM.L_SHOULDER].y + lm[LM.R_SHOULDER].y - lm[LM.L_HIP].y - lm[LM.R_HIP].y) / 2,
+    )
+    const swRaw = Math.max(shoulderDist, torsoImg / 1.3)
     if (swRaw > 0.02) this.sw += (swRaw - this.sw) * 0.2
     const sw = this.sw
+    // profile: how far the shoulders have closed up relative to the body
+    const profRaw = clamp(1 - (shoulderDist / sw - 0.35) / 0.5, 0, 1)
+    this.profile += (profRaw - this.profile) * 0.1
+    // in profile the far arm (the less visible wrist) is a guess: trust it less
+    const farWrist =
+      this.profile > 0.5 && this.all.length === N_LM
+        ? (lm[LM.L_WRIST].visibility ?? 1) < (lm[LM.R_WRIST].visibility ?? 1)
+          ? 'L'
+          : 'R'
+        : null
     // world shoulder width, to normalise depth
     let wsw = 0.35
     if (world && world.length >= N_LM) {
@@ -302,6 +325,7 @@ export class SandaTracker {
         vz: 0,
         speed: 0,
         vis: p.visibility ?? 1,
+        held: false,
       }))
     } else {
       for (let i = 0; i < N_LM; i++) {
@@ -312,17 +336,43 @@ export class SandaTracker {
         const vis = p.visibility ?? 1
         const rz = world ? -world[i].z / wsw : 0
         const jump = Math.hypot(rx - j.x, ry - j.y)
-        if (stalled || jump > sw * 1.2 || j.vis < 0.2) {
-          // no limb covers more than a shoulder-width in one frame: this
-          // is tracking snapping to a new guess, not motion — follow it,
-          // but carry no velocity out of it
+        // trust: a joint the model barely sees is a guess (an occluded far
+        // arm is "seen" hanging at the floor). Hold its last good position
+        // and let its velocity die rather than follow the invention. In
+        // profile the far wrist needs to be seen clearly before it moves.
+        const isFar = farWrist !== null && i === (farWrist === 'L' ? LM.L_WRIST : LM.R_WRIST)
+        const visNeeded = isFar ? 0.5 : 0.25
+        const untrusted = vis < visNeeded || j.vis < 0.35
+        if (untrusted) {
+          j.vx *= 0.5
+          j.vy *= 0.5
+          j.vz *= 0.5
+          j.speed = Math.hypot(j.vx, j.vy, j.vz * 0.7)
+          j.vis += (vis - j.vis) * 0.3
+          j.held = true
+          continue
+        }
+        if (stalled || jump > sw * 1.2) {
+          // a large jump is followed only when the limb is genuinely seen
+          // again (a re-acquire), never as a low-confidence teleport
+          if (jump > sw * 1.2 && vis < 0.6) {
+            j.vx *= 0.5
+            j.vy *= 0.5
+            j.vz *= 0.5
+            j.speed = Math.hypot(j.vx, j.vy, j.vz * 0.7)
+            j.vis += (vis - j.vis) * 0.3
+            j.held = true
+            continue
+          }
           j.x = rx
           j.y = ry
           j.z = rz
           j.vx = j.vy = j.vz = j.speed = 0
           j.vis += (vis - j.vis) * 0.3
+          j.held = false
           continue
         }
+        j.held = false
         // small jumps are mostly tracking noise: smooth them hard; a real
         // move is followed nearly raw so an onset is not blurred away
         const a = clamp(0.2 + (jump / sw) * 1.6, 0.2, 0.95)
@@ -345,6 +395,35 @@ export class SandaTracker {
       }
     }
     const J = (i: number) => this.all[i]
+
+    // ---- anatomy: a wrist cannot fall to the floor in one frame -----------
+    // While the body is busy (a strike in flight, high energy) and its
+    // shoulder is visible, a wrist that suddenly reads far below the hips
+    // or farther from the shoulder than an arm can reach is an occlusion
+    // guess: restore where it was and hold it.
+    for (const [wi, si, ei] of [
+      [LM.L_WRIST, LM.L_SHOULDER, LM.L_ELBOW],
+      [LM.R_WRIST, LM.R_SHOULDER, LM.R_ELBOW],
+    ] as const) {
+      const w = J(wi)
+      const sh = J(si)
+      const prev = this.prevWrist[wi]
+      if (prev && sh.vis > 0.5 && !w.held) {
+        const hipY = (J(LM.L_HIP).y + J(LM.R_HIP).y) / 2
+        const reach = Math.hypot(w.x - sh.x, w.y - sh.y) / sw
+        const dropped = w.y > hipY + sw * 0.3 && w.y - prev.y > sw * 0.6
+        const busy = this.energy > 0.25 || Object.values(this.rise).some((r) => r !== null)
+        if ((dropped && busy) || reach > 1.9) {
+          w.x = prev.x
+          w.y = prev.y
+          w.z = prev.z
+          w.vx = w.vy = w.vz = w.speed = 0
+          w.held = true
+          J(ei).held = true
+        }
+      }
+      this.prevWrist[wi] = { x: w.x, y: w.y, z: w.z }
+    }
 
     // ---- energy / stillness -------------------------------------------
     const movers = [LM.L_WRIST, LM.R_WRIST, LM.L_ELBOW, LM.R_ELBOW, LM.NOSE, LM.L_KNEE, LM.R_KNEE]
@@ -488,8 +567,8 @@ export class SandaTracker {
       const shoulder = J(si)
       // the hand tip reads a little ahead of the wrist; use the faster of the two
       const tip = J(wi === LM.L_WRIST ? LM.L_INDEX : LM.R_INDEX)
-      const hand = tip.vis > 0.4 && tip.speed > wrist.speed ? tip : wrist
-      if (wrist.vis < 0.35) {
+      const hand = tip.vis > 0.4 && tip.speed > wrist.speed && !tip.held ? tip : wrist
+      if (wrist.vis < 0.35 || wrist.held) {
         this.rise[key] = null
         return
       }
@@ -689,6 +768,7 @@ export class SandaTracker {
       gated: this.energy < EXPRESSION_FLOOR,
       breath: this.breath,
       sw: this.sw,
+      profile: this.profile,
       joints,
       all: this.all,
       strikes,
@@ -765,6 +845,7 @@ export function classifyPose(lm: PoseLM[] | null, mirror = true): PoseReading {
     vz: 0,
     speed: 0,
     vis: lm[i].visibility ?? 1,
+    held: false,
   })
   const joints: Record<string, Joint> = {}
   for (const [k, i] of Object.entries(NAMES)) joints[k] = J(i)
