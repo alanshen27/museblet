@@ -682,8 +682,9 @@ function updateBreath() {
   const now = ctx.currentTime
   const openSection = sectionIdx === 0 || sectionIdx === 3 ? 1.6 : 1
   // the breath only opens in real stillness, and grows slowly from there
-  // between bursts the breath comes in quickly, so a gap is never dead air
-  const target = body.breath > 0.3 ? Math.pow((body.breath - 0.3) / 0.7, 1.2) * 0.16 * openSection : 0
+  // the breath belongs to true stillness — about 0.7 s of it — not to the
+  // micro-pause between two punches; then it comes in quickly
+  const target = body.breath > 0.32 ? Math.pow((body.breath - 0.32) / 0.68, 1.2) * 0.16 * openSection : 0
   if (target > 0 && !breath) {
     const ac = ctx
     // the breath is the tone: air through a narrow resonator at the
@@ -1016,7 +1017,29 @@ function luo(midi: number, force: number, when: number, x = 0.5, big = false) {
 const band = { level: 0, x: 0.5, next: 0, k: 0, timer: 0 as ReturnType<typeof setInterval> | 0, lastFeed: 0, duck: 0 }
 let bandDrone: { osc: OscillatorNode; osc2: OscillatorNode; gain: GainNode; lp: BiquadFilterNode } | null = null
 let centreMidi = 45
-const PULSE = 0.3
+// the combat grid: a 130 BPM feel, eighths of 230 ms, two beats to a bar.
+// Everything rhythmic — the band, strike onsets, phrase resolutions — sits
+// on this one grid, anchored when the gate opens
+export const PULSE = 0.23
+let gridAnchor = 0
+export function anchorGrid() {
+  const ac = getContext()
+  gridAnchor = ac.currentTime
+}
+/** seconds until the next grid eighth (light swing: a little late, never early) */
+export function untilNextPulse(from?: number): number {
+  const ac = getContext()
+  const now = from ?? ac.currentTime
+  const ph = ((now - gridAnchor) % PULSE + PULSE) % PULSE
+  const wait = PULSE - ph
+  // an onset that has just missed the grid plays now rather than a whole
+  // eighth late; a touch of swing keeps it human
+  return (wait > PULSE * 0.78 ? 0 : wait) + Math.random() * 0.012
+}
+/** index of the eighth the time falls on (0 = downbeat of the bar) */
+export function pulseIndex(t: number): number {
+  return Math.round((t - gridAnchor) / PULSE) % 4
+}
 
 export function feedBand(level: number, x: number) {
   const ac = getContext()
@@ -1024,7 +1047,11 @@ export function feedBand(level: number, x: number) {
   band.x = x
   band.lastFeed = ac.currentTime
   if (!band.timer) {
-    band.next = ac.currentTime + 0.05
+    // start on the grid
+    const now = ac.currentTime
+    const n = Math.ceil((now + 0.02 - gridAnchor) / PULSE)
+    band.next = gridAnchor + n * PULSE
+    band.k = ((n % 4) + 4) % 4
     band.timer = setInterval(bandTick, 60)
   }
   ensureDrone()
@@ -1063,7 +1090,7 @@ function bandTick() {
   // the band coasts a moment after the feet stop, then falls silent
   const level = band.level * Math.max(0, 1 - idle / 1.6) * (1 - band.duck)
   band.duck = Math.max(0, band.duck - 0.06)
-  if (bandDrone) bandDrone.gain.gain.setTargetAtTime(level * 0.09, now, 0.25)
+  if (bandDrone) bandDrone.gain.gain.setTargetAtTime(level * 0.06, now, 0.25)
   if (level < 0.04) {
     clearInterval(band.timer)
     band.timer = 0
@@ -1072,13 +1099,13 @@ function bandTick() {
   while (band.next < now + 0.14) {
     const k = band.k++
     const down = k % 4 === 0
-    const off = k % 2 === 1
-    // the drum: every eighth, the downbeat heavier, the off-eighths lighter
-    // and only when the band is really moving
-    if (!off || level > 0.45) gu(level * (down ? 0.5 : off ? 0.14 : 0.25), band.next + (off ? 0.012 : 0), band.x, down)
-    // the low string on the downbeat, the fifth two eighths later at speed
-    if (down) pluck('qin', centreMidi - 12, 0.25 + level * 0.45, band.x, band.next - now)
-    else if (k % 4 === 2 && level > 0.35) pluck('qin', centreMidi - 5, 0.2 + level * 0.3, band.x, band.next - now)
+    const beat = k % 2 === 0
+    // a quiet pulse under the melody: the drum on the downbeat, on the
+    // second beat only when the feet are really moving; the low string on
+    // the downbeat only — nothing that competes with the punches
+    if (down) gu(level * 0.3, band.next, band.x, true)
+    else if (beat && level > 0.6) gu(level * 0.14, band.next, band.x, false)
+    if (down) pluck('qin', centreMidi - 12, 0.2 + level * 0.3, band.x, Math.max(0, band.next - now))
     band.next += PULSE
   }
 }
@@ -1086,9 +1113,12 @@ function bandTick() {
 // the guard: a held bed — two slow detuned voices and a breathy core at the
 // centre, rising while the hands stay up and dying when they drop
 let pad: { a: OscillatorNode; b: OscillatorNode; lp: BiquadFilterNode; gain: GainNode; lfo: OscillatorNode } | null = null
-export function setPad(level: number, x = 0.5) {
+let padDuck = 0
+export function setPad(level: number, x = 0.5, sinceStrikeMs = Infinity) {
   const ac = getContext()
   const now = ac.currentTime
+  // under a flurry the bed sits back; it swells only in the gaps
+  padDuck = sinceStrikeMs < 600 ? 0.45 : 1
   const target = clamp(level, 0, 1)
   if (target > 0.05 && !pad) {
     const a = ac.createOscillator()
@@ -1125,7 +1155,7 @@ export function setPad(level: number, x = 0.5) {
   }
   if (!pad) return
   // the bed arrives over half a second and leaves faster
-  pad.gain.gain.setTargetAtTime(target * 0.07, now, target > 0.05 ? 0.5 : 0.25)
+  pad.gain.gain.setTargetAtTime(target * 0.07 * padDuck, now, target > 0.05 ? 0.5 : 0.25)
   if (target <= 0.02) {
     const pd = pad
     pad = null
@@ -1333,39 +1363,60 @@ export type StrikeKind = 'punch' | 'kick'
  *   kick  → gu + 大锣 together, a 冲头 clapper roll accelerating into a
  *            second gong, and the pipa jumps register.
  */
+export interface StrikeOpts {
+  /** the note the phrase engine chose (already in the mode) */
+  note: number
+  /** seconds to wait so the onset lands on the grid */
+  at: number
+  /** true when the onset falls on a bar's downbeat */
+  downbeat: boolean
+  /** index within the current combination, 0 = first blow */
+  chain: number
+}
+
+/**
+ * A strike, phrased. The melody leads: every punch is a note in the mode,
+ * placed on the grid; the Foley under it is light and velocity-gated (a
+ * full cell only for a heavy blow, the 板 only on downbeats), so a
+ * combination reads as a line, not a drum fill. Kicks keep the chorus hit.
+ */
 export function strike(
   kind: StrikeKind,
   midi: number,
   force: number,
   x: number,
   rapid: number,
-  chain = 0,
+  opts?: Partial<StrikeOpts>,
 ) {
   const ac = getContext()
-  const t0 = ac.currentTime + 0.005
+  const at = opts?.at ?? 0
+  const t0 = ac.currentTime + 0.005 + at
+  const note = opts?.note ?? midi
+  const chain = opts?.chain ?? 0
+  const downbeat = opts?.downbeat ?? false
   force = clamp(force, 0.15, 1) * SECTION_FORCE[sectionIdx]
   const climax = sectionIdx === 2
   if (kind === 'punch') {
-    // one blow: the Foley cell and a 板 for the snap — and a note. Pitch
-    // from height, a hard blow an octave up; in a combination each blow
-    // climbs the scale (連击 as a run), and three in a row spin the wheel
-    impactCell('punch', force, t0, x)
-    ban(0.35 + force * 0.4, t0 + 0.004, x)
-    const note = midi + (force > 0.75 ? 12 : 0)
-    pluck('pipa', note, 0.55 + force * 0.45, x, 0.008)
-    if (chain >= 1) pluck('qin', note - 12, 0.4 + force * 0.3, x, 0.02)
-    if (force > 0.62 && sectionIdx > 0) luo(midi, force * 0.7, t0 + 0.06, x, false)
-    if (rapid >= 3 && climax) feedWheel(note, 6 + rapid * 2, 0.3 + force * 0.4, x)
-    residueBurst(force * 0.5, 0.1)
+    const heavy = force > 0.72
+    // the note: the lead voice. The first blow of a phrase and heavy blows
+    // are doubled an octave below on the qin
+    pluck('pipa', note, 0.5 + force * 0.5, x, at + 0.004)
+    if (chain === 0 || heavy) pluck('qin', note - 12, 0.35 + force * 0.3, x, at + 0.012)
+    // the Foley, thinned: light contact for a jab, the full cell for a
+    // heavy blow; the 板 only on the downbeat or under weight
+    impactCell('punch', heavy ? force : force * 0.4, t0, x)
+    if (downbeat || heavy) ban(0.3 + force * 0.35, t0 + 0.004, x)
+    if (rapid >= 3 && climax) feedWheel(note, 6 + rapid * 2, 0.25 + force * 0.35, x)
+    if (heavy) residueBurst(force * 0.4, at + 0.1)
   } else {
-    // a kick lands with the whole body — the chorus hit: the heavy cell, the
-    // 大鼓, the 大锣, and a chord leaping a register above the band
+    // the chorus hit: the heavy cell, the 大鼓, the 大锣, and a chord
+    // leaping a register above the band
     impactCell('kick', force, t0, x)
     gu(force, t0 + 0.006, x, true)
-    if (force > 0.45) luo(midi - 12, force, t0 + 0.03, x, true)
-    pluck('qin', midi + 12, 0.7 + force * 0.3, x, 0.02)
-    pluck('qin', midi + 19, 0.55 + force * 0.3, x, 0.06)
-    pluck('pipa', midi + 24, 0.6 + force * 0.3, x, 0.1)
+    if (force > 0.45) luo(note - 12, force, t0 + 0.03, x, true)
+    pluck('qin', note + 12, 0.7 + force * 0.3, x, at + 0.02)
+    pluck('qin', note + 19, 0.55 + force * 0.3, x, at + 0.06)
+    pluck('pipa', note + 24, 0.6 + force * 0.3, x, at + 0.1)
     if (pad) pad.gain.gain.setTargetAtTime(0.14, t0, 0.05)
     if (climax && force > 0.7) {
       let t = 0.26
@@ -1373,10 +1424,18 @@ export function strike(
         ban(0.5 * force, t0 + t, x)
         t += gap
       }
-      luo(midi - 5, force * 0.6, t0 + t, x, false)
+      luo(note - 5, force * 0.6, t0 + t, x, false)
     }
-    residueBurst(force * 0.8, 0.12)
+    residueBurst(force * 0.8, at + 0.12)
   }
+}
+
+/** the barline: a phrase has ended — a soft gong tap on the grid and the bed on the root */
+export function phraseEnd(x = 0.5) {
+  const ac = getContext()
+  const at = untilNextPulse()
+  luo(centreMidi + 12, 0.28, ac.currentTime + at, x, false)
+  resolve()
 }
 
 // ------------------------------------------------------- generic notes --

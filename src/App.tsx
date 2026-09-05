@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import InkSurface, { type DrawHandle, type DrawPoint } from './InkSurface'
 import BodyLayer, { LEFT_HAND, RIGHT_HAND } from './BodyLayer'
 import {
+  anchorGrid,
   armAudio,
   bow,
   breathPitch,
@@ -13,6 +14,8 @@ import {
   feedBand,
   feedRoll,
   flageolets,
+  phraseEnd,
+  pulseIndex,
   resolve,
   setCentre,
   setPad,
@@ -27,6 +30,7 @@ import {
   setScaleName,
   setSection as setAudioSection,
   strike as audioStrike,
+  untilNextPulse,
 } from './audio'
 import { PerformanceForm, SECTION_INFO, SECTIONS, type FormState } from './performance'
 import { bindInlet, isMax, outletMessage, outletNote } from './max'
@@ -77,6 +81,16 @@ export default function App() {
   const formStrikesRef = useRef(0)
   const lastBodyRef = useRef<BodyState | null>(null)
   const lastStrikeRef = useRef(-Infinity)
+  // the phrase: a combination is one line in the mode. It starts on the
+  // phrase tonic (the current centre), each blow steps up the scale with a
+  // dip every fourth (up-up-up-down, a motif rather than a ladder); the rear
+  // hand sits a fifth below the lead; a fist above the head lifts an octave.
+  // A gap of a second, or a freeze, is the barline: the phrase resolves and
+  // the next one starts on the tonic again
+  const phraseRef = useRef({ idx: 0, tonic: 55, open: false, blows: 0 })
+  const PHRASE_GAP_MS = 1000
+  const [busy, setBusy] = useState<{ phrase: number; beat: number } | null>(null)
+  const debugBusy = new URLSearchParams(window.location.search).has('busy')
   const rollOnRef = useRef(false)
   const rollArmRef = useRef(0)
   const erhuMaxRef = useRef(0)
@@ -159,6 +173,7 @@ export default function App() {
     setGateProgress(1)
     surface.current?.setGate(1, true)
     gateOpenAtRef.current = performance.now()
+    if (!inMax) anchorGrid()
     formRef.current.start(performance.now())
     if (inMax) outletMessage('gate', 'open')
     else gateComplete()
@@ -177,6 +192,14 @@ export default function App() {
         present: b?.present ?? false,
       })
       formStrikesRef.current = 0
+      // the barline: a phrase that has gone quiet for a second resolves
+      const ph = phraseRef.current
+      const since = performance.now() - lastStrikeRef.current
+      if (ph.open && since > PHRASE_GAP_MS) {
+        ph.open = false
+        if (ph.blows >= 2 && !inMax) phraseEnd(0.5 + (b?.lean ?? 0) * 0.3)
+        if (inMax) outletMessage('phrase', 'end', ph.blows)
+      }
       setForm(st)
       surface.current?.setMood({ density: st.density, section: st.index, breath: b?.breath ?? 0, lean: b?.lean ?? 0 })
       if (inMax) {
@@ -243,13 +266,39 @@ export default function App() {
       if (!gateOpenRef.current) return
       const s: Strike = { kind: e.type, side: e.side, x: e.x, y: e.y, dx: e.dx, dy: e.dy, force: e.force, t: e.t, drive: 0, confidence: e.confidence }
       const rapid = e.rapid
+      const gap = e.t - lastStrikeRef.current
       lastStrikeRef.current = e.t
-      // pitch from height: high strikes ring high. In a combination the
-      // blows climb the scale — a run, not a denser drum
-      const chain = s.kind === 'punch' ? Math.max(0, rapid - 1) : 0
-      const base = scaleDegree(1 - s.y, scaleRef.current, s.kind === 'kick' ? 43 : s.kind === 'snap' ? 50 : 55, 2)
-      const midi = chain ? stepInScale(base, Math.min(chain, 6), scaleRef.current) : base
+      // ---- the phrase engine: a stable pitch language ----------------------
+      const ph = phraseRef.current
+      if (gap > PHRASE_GAP_MS || !ph.open) {
+        ph.idx = 0
+        ph.blows = 0
+        ph.tonic = chordAt(scaleRef.current, centreIndex(e.t), 55)[0]
+        ph.open = true
+      }
+      const chain = ph.blows
+      // the rear hand (right for an orthodox stance: screen-right) a fifth
+      // below the lead; a fist above the head lifts an octave
+      const shY = e.joints ? ((e.joints.lShoulder?.y ?? 0.4) + (e.joints.rShoulder?.y ?? 0.4)) / 2 : 0.4
+      const swv = e.joints ? Math.abs((e.joints.lShoulder?.x ?? 0.4) - (e.joints.rShoulder?.x ?? 0.6)) || 0.2 : 0.2
+      const register = (e.side === 'R' ? -3 : 0) + (e.y < shY - swv * 0.3 ? 5 : 0) // in scale steps
+      const contour = ph.idx // up, up, up, down…
+      const note =
+        s.kind === 'punch'
+          ? stepInScale(ph.tonic, contour + register, scaleRef.current)
+          : s.kind === 'kick'
+            ? stepInScale(ph.tonic, -5, scaleRef.current)
+            : ph.tonic
+      if (s.kind === 'punch') {
+        ph.blows++
+        ph.idx = ph.blows % 4 === 3 ? Math.max(0, ph.idx - 2) : ph.idx + 1
+      }
+      const midi = note
       const vel = Math.round(40 + s.force * 87)
+      // ---- the grid: onsets land on the next eighth of the combat pulse ----
+      const at = inMax ? 0 : untilNextPulse()
+      const downbeat = inMax ? false : pulseIndex(performance.now() / 1000 + at) === 0
+      if (debugBusy) setBusy({ phrase: ph.blows, beat: pulseIndex(performance.now() / 1000 + at) })
       surface.current?.strike(s, glyphFor(e))
       if (s.kind !== 'snap') {
         setHits((h) => h + 1)
@@ -295,7 +344,8 @@ export default function App() {
       } else if (s.kind === 'snap') {
         snapPose(s.force, s.x)
         resolve()
-      } else audioStrike(s.kind, midi, s.force, s.x, rapid, chain)
+        phraseRef.current.open = false
+      } else audioStrike(s.kind, midi, s.force, s.x, rapid, { note, at, downbeat, chain })
     },
     [inMax],
   )
@@ -335,7 +385,7 @@ export default function App() {
         const rw = b.joints.rWrist
         const shY = ((b.joints.lShoulder?.y ?? 0.4) + (b.joints.rShoulder?.y ?? 0.4)) / 2
         const handsUp = [lw, rw].filter((w) => w && !w.held && w.vis > 0.4 && w.y < shY + b.sw * 0.4).length / 2
-        setPad(Math.max(b.guard, handsUp * 0.7), 0.5 + b.lean * 0.3)
+        setPad(Math.max(b.guard, handsUp * 0.7), 0.5 + b.lean * 0.3, now - lastStrikeRef.current)
         if (b.seize > 0.6) resolve()
       }
       // 蓄: a hand drawn back is the breath before the blow
@@ -664,6 +714,11 @@ export default function App() {
           <span className={`gate-ind ${gateState}`} title="expression gate">
             {gateState}
           </span>
+          {debugBusy && busy && (
+            <span className="gate-ind open" title="phrase · beat">
+              phrase {busy.phrase} · beat {busy.beat}
+            </span>
+          )}
           <div className="meters" aria-hidden>
             {(['stance', 'root', 'breath', 'energy'] as const).map((k) => (
               <span key={k} className="meter" title={k}>
@@ -689,14 +744,14 @@ export default function App() {
               <span className="cjk">拓</span> your round is the piece
             </h3>
             <p className="help-note">
-              Fight, and it plays. <b>Footwork</b> is the band, <b>guard</b> is the bed, <b>punches</b> are notes, <b>kicks</b> are the hits, a <b>freeze</b> ends the phrase.
+              Fight, and it plays — in one key. <b>Punches are phrases</b>: each blow a note in the mode, a combination climbing from the tonic; <b>footwork</b> is a quiet pulse under them; a <b>kick</b> is the section hit; a <b>pause</b> is the barline — the phrase resolves and the next starts on the tonic.
               Two kinds of sound: <b>continuous</b> layers that live only while the movement that carries them is held, and <b>strikes</b> — one gesture, one blow. Small movements do nothing.
             </p>
             <dl>
               <dt className="help-group">continuous — the band</dt>
               <dd />
               <dt>footwork — bounce, shuffle, weight shift</dt>
-              <dd>the band: a soft drum on the pulse, the low string on the downbeats, a sub under it; it moves when you move and coasts when you stop</dd>
+              <dd>a quiet pulse: the drum and the low string on the downbeats, a sub under it; it moves when you move and coasts when you stop</dd>
               <dt>guard up (hands at the face or above the shoulders)</dt>
               <dd>the bed: a held two-voice drone at the centre of the mode; drops when the hands drop</dd>
               <dt>stand still between bursts</dt>
@@ -708,9 +763,11 @@ export default function App() {
               <dt>a hand drawn back</dt>
               <dd>蓄 — a breath before the blow</dd>
               <dt>punch — the fist driven straight out along the arm, then stopped</dt>
-              <dd>one blow (crack, thud, weight) <i>and</i> a note: height is pitch, a hard blow an octave up, side is pan. Flaps and chops across the arm are not punches</dd>
-              <dt>combination — two or more punches inside 1.2 s</dt>
-              <dd>the notes climb the scale, a run; at the climax three in a row spin the pipa wheel (轮指)</dd>
+              <dd>a note in the mode, on the beat; the lead hand carries the line, the rear hand sits a fifth below; a fist above the head lifts an octave; a heavy blow is doubled below and lands its full weight. Flaps and chops across the arm are not punches</dd>
+              <dt>combination — blows less than a second apart</dt>
+              <dd>one phrase: up, up, up, dip — a motif, not a ladder; at the climax three in a row spin the pipa wheel (轮指)</dd>
+              <dt>a second of quiet</dt>
+              <dd>the barline: a soft gong, the bed settles on the root, the next phrase starts from the tonic</dd>
               <dt>kick</dt>
               <dd>the chorus hit: the heavy blow, the great drum, the great gong, and a chord leaping a register above the band; the curtain tears</dd>
               <dt>freeze, clinch, 亮相</dt>
