@@ -9,7 +9,18 @@ ground, one red seal — and the musical language is Chinese: pentatonic
 modes, guqin space and decay, pipa attack, dizi breath, luogu impact, and
 留白, the silence that makes the strike land.
 
-**Default: a combat-sport performance.** Your round is the piece. Footwork
+**Default: a combat-sport performance.** Your round is the piece, in one
+key. The design target is *continuous combination density* — jab-cross-hook
+flurries with kicks and almost no holds — and coherence at that density
+means: **punches are the melody** (each blow a note in the mode; a
+combination climbs from the phrase tonic in an up-up-up-dip motif; the rear
+hand a fifth below the lead; a fist above the head an octave up; the Foley
+under a jab is light and velocity-gated, the 板 only on downbeats); onsets
+land on a **130 BPM grid** (eighths of 230 ms, light swing); a **second of
+quiet is the barline** (a soft gong, the bed settles on the root, the next
+phrase starts from the tonic); footwork is a **quiet pulse** (drum and low
+string on downbeats only); the guard bed sits back under a flurry and
+swells in the gaps; the breath waits for real stillness. Footwork
 is the band — a low ostinato that plays while you move and coasts when you
 stop; the guard is a held bed; punches are notes and blows (height is
 pitch, a hard one an octave up, a combination climbs the scale); kicks are
