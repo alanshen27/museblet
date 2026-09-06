@@ -77,6 +77,14 @@ export interface Joint {
   y: number
   /** depth in shoulder-widths, from the world landmarks (+ = toward camera) */
   z: number
+  /**
+   * the world landmark's lateral / vertical position, in shoulder-widths, in
+   * the same frame as `z`: x to screen-right (mirrored like `x`), y down.
+   * With `z` this is one metric 3D point per joint, for anything that aims
+   * limbs in depth (the figure). Zero when no world landmarks arrive.
+   */
+  wx: number
+  wy: number
   vx: number
   vy: number
   /** depth velocity, shoulder-widths per second */
@@ -239,7 +247,7 @@ export class SandaTracker {
   private missing = 0
   private profile = 0
   private footwork = 0
-  private prevWrist: Record<number, { x: number; y: number; z: number }> = {}
+  private prevWrist: Record<number, { x: number; y: number; z: number; wx: number; wy: number }> = {}
   private mirror: boolean
 
   constructor(mirror = true) {
@@ -323,6 +331,8 @@ export class SandaTracker {
         x: sx(p),
         y: p.y,
         z: world ? -world[i].z / wsw : 0,
+        wx: world ? (this.mirror ? -world[i].x : world[i].x) / wsw : 0,
+        wy: world ? world[i].y / wsw : 0,
         vx: 0,
         vy: 0,
         vz: 0,
@@ -338,6 +348,8 @@ export class SandaTracker {
         const ry = p.y
         const vis = p.visibility ?? 1
         const rz = world ? -world[i].z / wsw : 0
+        const rwx = world ? (this.mirror ? -world[i].x : world[i].x) / wsw : 0
+        const rwy = world ? world[i].y / wsw : 0
         const jump = Math.hypot(rx - j.x, ry - j.y)
         // trust: a joint the model barely sees is a guess (an occluded far
         // arm is "seen" hanging at the floor). Hold its last good position
@@ -370,6 +382,8 @@ export class SandaTracker {
           j.x = rx
           j.y = ry
           j.z = rz
+          j.wx = rwx
+          j.wy = rwy
           j.vx = j.vy = j.vz = j.speed = 0
           j.vis += (vis - j.vis) * 0.3
           j.held = false
@@ -391,6 +405,9 @@ export class SandaTracker {
         const vz = (nz - j.z) / dt
         j.vz += (vz - j.vz) * 0.5
         j.z = nz
+        // the world point follows with the depth's smoothing: one 3D point
+        j.wx += (rwx - j.wx) * 0.5
+        j.wy += (rwy - j.wy) * 0.5
         // a punch thrown straight at the lens is mostly depth motion:
         // count it, at a discount for the world estimate's jitter
         j.speed = Math.hypot(j.vx, j.vy, j.vz * 0.7)
@@ -420,12 +437,14 @@ export class SandaTracker {
           w.x = prev.x
           w.y = prev.y
           w.z = prev.z
+          w.wx = prev.wx
+          w.wy = prev.wy
           w.vx = w.vy = w.vz = w.speed = 0
           w.held = true
           J(ei).held = true
         }
       }
-      this.prevWrist[wi] = { x: w.x, y: w.y, z: w.z }
+      this.prevWrist[wi] = { x: w.x, y: w.y, z: w.z, wx: w.wx, wy: w.wy }
     }
 
     // ---- energy / stillness -------------------------------------------
@@ -858,6 +877,8 @@ export function classifyPose(lm: PoseLM[] | null, mirror = true): PoseReading {
     x: mirror ? 1 - lm[i].x : lm[i].x,
     y: lm[i].y,
     z: 0,
+    wx: 0,
+    wy: 0,
     vx: 0,
     vy: 0,
     vz: 0,
