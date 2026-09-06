@@ -146,6 +146,8 @@ export class Character {
   private modelLeg = 0.8
   private scaleS = 0
   private posS = new THREE.Vector3(0.5, 0.5, 0)
+  // which way the trunk basis faces the lens (+1) — flipped with hysteresis
+  private facing = 1
   private fade = 0
   private energyS = 0
   private strikeS = 0
@@ -289,6 +291,17 @@ export class Character {
     this.uniforms.paper.value = paper ? 1 : 0
   }
 
+  /** world positions of named bones after the last update — for harnesses */
+  probe(names: string[]): Record<string, [number, number, number]> {
+    const out: Record<string, [number, number, number]> = {}
+    this.rig.updateMatrixWorld(true)
+    for (const n of names) {
+      const b = this.bones.get(n)
+      if (b) out[n] = b.getWorldPosition(new THREE.Vector3()).toArray() as [number, number, number]
+    }
+    return out
+  }
+
   /** set a bone's local rotation relative to its rest rotation */
   private poseRel(name: string, e: THREE.Euler) {
     const b = this.bones.get(name)
@@ -341,15 +354,29 @@ export class Character {
 
     const all = body.all
     const sw = body.sw
-    const P = (i: number, out: THREE.Vector3) => out.set(all[i].x * aspect, 1 - all[i].y, all[i].z * sw * 0.9)
-    const hipMid = new THREE.Vector3().addVectors(P(LM.L_HIP, this.tA), P(LM.R_HIP, this.tB)).multiplyScalar(0.5)
-    const shMid = new THREE.Vector3().addVectors(P(LM.L_SHOULDER, this.tA), P(LM.R_SHOULDER, this.tB)).multiplyScalar(0.5)
+    // Two spaces, kept apart. The SCREEN point (image landmark, orthographic
+    // "uv" space: x in aspect units, y up) places and fits the rig on the
+    // canvas. The METRIC point (world landmark, shoulder-widths, y up, z
+    // toward the camera) aims the bones: a punch at the lens is a limb
+    // along +z, a side-on stance a shoulder line along z. Mixing the two —
+    // projective x/y with metric z — made every aim wrong in depth.
+    const S = (i: number, out: THREE.Vector3) => out.set(all[i].x * aspect, 1 - all[i].y, 0)
+    const hasWorld = all.some((j) => j.wx !== 0 || j.wy !== 0)
+    const M = hasWorld
+      ? (i: number, out: THREE.Vector3) => out.set(all[i].wx, -all[i].wy, all[i].z)
+      : // no world landmarks (an older harness): the image plane, z in the
+        // image's own scale, as before
+        (i: number, out: THREE.Vector3) => out.set(all[i].x * aspect, 1 - all[i].y, all[i].z * sw * 0.9)
+    const hipMid = new THREE.Vector3().addVectors(S(LM.L_HIP, this.tA), S(LM.R_HIP, this.tB)).multiplyScalar(0.5)
+    const hipMidM = new THREE.Vector3().addVectors(M(LM.L_HIP, this.tA), M(LM.R_HIP, this.tB)).multiplyScalar(0.5)
+    const shMidM = new THREE.Vector3().addVectors(M(LM.L_SHOULDER, this.tA), M(LM.R_SHOULDER, this.tB)).multiplyScalar(0.5)
 
     // fit: one uniform scale from the tracked leg length (hip → ankle, the
     // same joints on both sides) against the model's, smoothed slowly so the
-    // figure never pulses; the hips follow the tracked hips with damping
-    const legL = P(LM.L_HIP, this.tA).distanceTo(P(LM.L_ANKLE, this.tB))
-    const legR = P(LM.R_HIP, this.tA).distanceTo(P(LM.R_ANKLE, this.tB))
+    // figure never pulses; the hips follow the tracked hips with damping.
+    // The fit is a screen measure — the asset's proportions carry the rest
+    const legL = S(LM.L_HIP, this.tA).distanceTo(S(LM.L_ANKLE, this.tB))
+    const legR = S(LM.R_HIP, this.tA).distanceTo(S(LM.R_ANKLE, this.tB))
     const s = Math.max(0.05, ((legL + legR) / 2) / this.modelLeg)
     this.scaleS = this.scaleS === 0 ? s : this.scaleS + (s - this.scaleS) * Math.min(1, dt * 0.8)
     this.posS.lerp(hipMid, Math.min(1, dt * 14))
@@ -363,18 +390,28 @@ export class Character {
     // torso: a full basis — up along the spine, the character's +X (its
     // left) along the shoulder line toward the subject's right
     const hips = this.bones.get('Hips')
+    const torso = new THREE.Matrix4()
     if (hips) {
-      const up = this.tC.subVectors(shMid, hipMid).normalize()
-      const left = new THREE.Vector3().subVectors(P(LM.R_SHOULDER, this.tA), P(LM.L_SHOULDER, this.tB))
-      left.addScaledVector(up, -left.dot(up)).normalize()
+      const up = this.tC.subVectors(shMidM, hipMidM).normalize()
+      // the shoulder line and the hip line, averaged: the pelvis follows the
+      // trunk's turn, and one noisy shoulder does not swing the whole body
+      const left = new THREE.Vector3().subVectors(M(LM.R_SHOULDER, this.tA), M(LM.L_SHOULDER, this.tB))
+      left.add(this.tA.subVectors(M(LM.R_HIP, this.tA), M(LM.L_HIP, this.tB)))
+      left.addScaledVector(up, -left.dot(up))
+      if (left.lengthSq() < 1e-6) left.set(1, 0, 0)
+      left.normalize()
       const fwd = new THREE.Vector3().crossVectors(left, up).normalize()
-      if (fwd.z < 0) {
+      // the shadow has no front or back: keep the mesh facing the lens, but
+      // only flip once the body has clearly turned past profile, so a
+      // side-on stance does not flicker between the two
+      if (fwd.z * this.facing < -0.18) this.facing = -this.facing
+      if (this.facing < 0) {
         left.negate()
         fwd.negate()
       }
       // new hips world = basis · rest world; expressed in the parent's frame
-      this.tM.makeBasis(left, up, fwd)
-      const B = this.tQ2.setFromRotationMatrix(this.tM)
+      torso.makeBasis(left, up, fwd)
+      const B = this.tQ2.setFromRotationMatrix(torso)
       const Pq = hips.parent ? hips.parent.getWorldQuaternion(this.tQ) : this.tQ.identity()
       hips.quaternion.copy(Pq).invert().multiply(B).multiply(this.hipsRestWorldQ)
       hips.updateMatrixWorld(true)
@@ -389,10 +426,10 @@ export class Character {
       const bone = this.bones.get(aim.bone)
       const d0 = this.restDir.get(aim.bone)
       if (!bone || !d0 || !bone.parent) continue
-      const from = P(aim.from, this.tA)
-      const to = P(aim.to, this.tB)
+      const from = M(aim.from, this.tA)
+      const to = M(aim.to, this.tB)
       const dir = this.tC.subVectors(to, from)
-      if (dir.lengthSq() < 1e-8) continue
+      if (dir.lengthSq() < 1e-6) continue
       dir.normalize()
       const r0 = this.restQ.get(aim.bone)
       if (!r0) continue
@@ -409,10 +446,16 @@ export class Character {
     const head = this.bones.get('Head')
     const neck = this.bones.get('Neck')
     if (head) {
-      const nose = P(LM.NOSE, this.tA)
-      const earMid = this.tB.addVectors(P(LM.L_EAR, this.tC), P(LM.R_EAR, new THREE.Vector3())).multiplyScalar(0.5)
-      const yaw = THREE.MathUtils.clamp(((nose.x - earMid.x) / (sw * aspect)) * 1.6, -0.9, 0.9)
-      const pitch = THREE.MathUtils.clamp(((nose.y - earMid.y) / sw) * 1.2, -0.5, 0.5)
+      // the nose against the ears, taken into the trunk's frame so a turned
+      // body does not also turn the head; in metric space this is a true
+      // yaw (the nose leads the ears toward the lens when facing it)
+      const nose = M(LM.NOSE, this.tA)
+      const earMid = this.tB.addVectors(M(LM.L_EAR, this.tC), M(LM.R_EAR, new THREE.Vector3())).multiplyScalar(0.5)
+      const d = this.tC.subVectors(nose, earMid)
+      if (hips) d.applyMatrix4(this.tM.copy(torso).invert())
+      const scale = hasWorld ? 1 : sw
+      const yaw = THREE.MathUtils.clamp(hasWorld ? Math.atan2(d.x, Math.max(0.02, Math.abs(d.z))) : (d.x / (scale * aspect)) * 1.6, -0.9, 0.9)
+      const pitch = THREE.MathUtils.clamp((d.y / scale) * 1.2, -0.5, 0.5)
       const nr = neck ? this.restQ.get('Neck') : undefined
       if (neck && nr) neck.quaternion.copy(nr)
       this.poseRel('Head', new THREE.Euler(-pitch * 0.6, yaw, 0, 'YXZ'))

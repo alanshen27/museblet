@@ -364,7 +364,7 @@ export default function App() {
         console.warn('strike sound failed (the ink still landed):', err)
       }
     },
-    [inMax, soundStrike],
+    [soundStrike],
   )
 
   useEffect(() => onStrike(landStrike), [landStrike])
