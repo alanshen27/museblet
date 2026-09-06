@@ -88,6 +88,8 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
     let stopped = false
     let ghost = false
     let ghostSince = 0
+    let ghostLast = 0
+    let fps = 0
     const params = new URLSearchParams(window.location.search)
     const wantDemo = params.has('demo')
     const modelName = MODEL_URLS[params.get('pose') ?? ''] ? (params.get('pose') as string) : 'full'
@@ -126,7 +128,7 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
         return
       }
       const lines = [
-        `${ghost ? 'ghost performer' : `pose ${modelName}`} ${b.present ? 'tracking' : 'lost'}   ${b.gated ? 'GATED (silent)' : 'open'}   profile ${b.profile.toFixed(2)}   held ${b.all.filter((j) => j.held).length}   phase ${b.phase}   section ${sectionRef.current} @ ${sectionSecRef.current.toFixed(1)}s   piece ${secondsRef.current.toFixed(1)}s`,
+        `${ghost ? 'ghost performer' : `pose ${modelName}`} ${b.present ? 'tracking' : 'lost'}   ${b.gated ? 'GATED (silent)' : 'open'}   profile ${b.profile.toFixed(2)}   held ${b.all.filter((j) => j.held).length}   phase ${b.phase}   section ${sectionRef.current} @ ${sectionSecRef.current.toFixed(1)}s   piece ${secondsRef.current.toFixed(1)}s   ${fps.toFixed(0)} fps${fps > 0 && fps < 6 ? ' STARVED' : ''}`,
         `energy ${b.energy.toFixed(2)}  stillness ${b.stillness.toFixed(2)}  breath ${b.breath.toFixed(2)}`,
         `stance ${b.stance.toFixed(2)}  root ${b.root.toFixed(2)}  guard ${b.guard.toFixed(2)}  lean ${b.lean.toFixed(2)}  turn ${b.turn.toFixed(2)}`,
         `L wrist ${b.joints.lWrist?.speed.toFixed(1) ?? '-'}  R wrist ${b.joints.rWrist?.speed.toFixed(1) ?? '-'}  (punch > ${PUNCH_SPEED})`,
@@ -199,8 +201,13 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
     }
 
     const feed = (b: BodyState) => {
+      // the figure first: the silhouette follows the body whatever else fails
       surface.current?.setBody(b)
-      onBodyRef.current(b)
+      try {
+        onBodyRef.current(b)
+      } catch (err) {
+        console.warn('body handler failed (the figure and the strikes go on):', err)
+      }
       const source = ghost ? 'ghost' : 'pose'
       for (const st of b.strikes) {
         emitStrike({
@@ -241,17 +248,33 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
     }
 
     let lastVideoTime = -1
+    let lastLoop = 0
     const loop = () => {
       if (stopped) return
       const now = performance.now()
+      // the loop's own rate, for the tracking view: a starved page (under
+      // ~5 fps) reads every frame as stalled and can land nothing
+      if (lastLoop) fps = fps + (1000 / Math.max(1, now - lastLoop) - fps) * 0.1
+      lastLoop = now
       if (ghost) {
         // the ghost performer: before the gate opens it stands and
         // breathes, so the gate opens itself; then it plays the piece
         // one continuous clock for the performer's motion; the section and
         // its own time come from the form once the gate is open
-        const t = (now - ghostSince) / 1000
-        const frame = demoPose(t, openRef.current ? sectionRef.current : 0, openRef.current ? sectionSecRef.current : t)
-        feed(tracker.update(frame.landmarks, now, frame.world))
+        // the ghost is synthetic, so a starved frame (a slow machine, a
+        // background tab) is sub-stepped at ~30 Hz: the tracker sees real
+        // velocities and the ghost keeps striking instead of stalling
+        const STEP = 1000 / 30
+        const from = Math.max(ghostLast, now - STEP * 12)
+        const steps = Math.max(1, Math.round((now - from) / STEP))
+        for (let k = steps - 1; k >= 0; k--) {
+          const ts = now - k * ((now - from) / steps)
+          const t = (ts - ghostSince) / 1000
+          const back = (now - ts) / 1000
+          const frame = demoPose(t, openRef.current ? sectionRef.current : 0, openRef.current ? Math.max(0, sectionSecRef.current - back) : t)
+          feed(tracker.update(frame.landmarks, ts, frame.world))
+        }
+        ghostLast = now
       } else if (landmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
         lastVideoTime = video.currentTime
         try {
@@ -270,6 +293,7 @@ export default function BodyLayer({ surface, onBody, open, section, pieceSeconds
     const startGhost = () => {
       ghost = true
       ghostSince = performance.now()
+      ghostLast = ghostSince
       tracker.reset()
       setStatus('ghost')
     }

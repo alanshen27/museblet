@@ -4,6 +4,7 @@ import BodyLayer, { LEFT_HAND, RIGHT_HAND } from './BodyLayer'
 import {
   anchorGrid,
   armAudio,
+  audioNow,
   bow,
   breathPitch,
   brushEnd,
@@ -260,14 +261,9 @@ export default function App() {
     return '打'
   }
 
-  // every strike — live pose, ghost, pointer or a test harness — lands here
-  const landStrike = useCallback(
-    (e: StrikeEvent) => {
-      if (!gateOpenRef.current) return
-      const s: Strike = { kind: e.type, side: e.side, x: e.x, y: e.y, dx: e.dx, dy: e.dy, force: e.force, t: e.t, drive: 0, confidence: e.confidence }
-      const rapid = e.rapid
-      const gap = e.t - lastStrikeRef.current
-      lastStrikeRef.current = e.t
+  /** the sound of a landed strike: the phrase engine, the grid, the cell */
+  const soundStrike = useCallback(
+    (e: StrikeEvent, s: Strike, rapid: number, gap: number) => {
       // ---- the phrase engine: a stable pitch language ----------------------
       const ph = phraseRef.current
       if (gap > PHRASE_GAP_MS || !ph.open) {
@@ -297,19 +293,8 @@ export default function App() {
       const vel = Math.round(40 + s.force * 87)
       // ---- the grid: onsets land on the next eighth of the combat pulse ----
       const at = inMax ? 0 : untilNextPulse()
-      const downbeat = inMax ? false : pulseIndex(performance.now() / 1000 + at) === 0
-      if (debugBusy) setBusy({ phrase: ph.blows, beat: pulseIndex(performance.now() / 1000 + at) })
-      surface.current?.strike(s, glyphFor(e))
-      if (s.kind !== 'snap') {
-        setHits((h) => h + 1)
-        formStrikesRef.current++
-      }
-      if (e.source !== 'pose' && e.source !== 'ghost') {
-        // sources without a body drive the phase glyph themselves
-        setPhase('发')
-        setTimeout(() => setPhase((p) => (p === '发' ? '收' : p)), 340)
-        setTimeout(() => setPhase((p) => (p === '收' ? '势' : p)), 1200)
-      }
+      const downbeat = inMax ? false : pulseIndex(audioNow() + at) === 0
+      if (debugBusy) setBusy({ phrase: ph.blows, beat: pulseIndex(audioNow() + at) })
       if (inMax) {
         outletMessage('strike', s.kind, midi, vel, Number(s.x.toFixed(3)), Number(s.y.toFixed(3)), rapid, Number(e.confidence.toFixed(2)))
         // the luogu cell, spelled out as notes so simple patches still speak
@@ -350,6 +335,38 @@ export default function App() {
     [inMax],
   )
 
+  // every strike — live pose, ghost, pointer or a test harness — lands here
+  const landStrike = useCallback(
+    (e: StrikeEvent) => {
+      if (!gateOpenRef.current) return
+      const s: Strike = { kind: e.type, side: e.side, x: e.x, y: e.y, dx: e.dx, dy: e.dy, force: e.force, t: e.t, drive: 0, confidence: e.confidence }
+      const rapid = e.rapid
+      const gap = e.t - lastStrikeRef.current
+      lastStrikeRef.current = e.t
+      // ---- the ink first: the seal, the burst, the afterimage, the tally --
+      // A strike is seen before it is heard. Nothing below (the phrase
+      // engine, the grid, the audio graph) may stop the visual landing, so
+      // the visual goes first and the sound is guarded.
+      surface.current?.strike(s, glyphFor(e))
+      if (s.kind !== 'snap') {
+        setHits((h) => h + 1)
+        formStrikesRef.current++
+      }
+      if (e.source !== 'pose' && e.source !== 'ghost') {
+        // sources without a body drive the phase glyph themselves
+        setPhase('发')
+        setTimeout(() => setPhase((p) => (p === '发' ? '收' : p)), 340)
+        setTimeout(() => setPhase((p) => (p === '收' ? '势' : p)), 1200)
+      }
+      try {
+        soundStrike(e, s, rapid, gap)
+      } catch (err) {
+        console.warn('strike sound failed (the ink still landed):', err)
+      }
+    },
+    [inMax, soundStrike],
+  )
+
   useEffect(() => onStrike(landStrike), [landStrike])
 
   const onBody = useCallback(
@@ -380,13 +397,18 @@ export default function App() {
       }
       // combat grammar: the footwork is the band, the guard is the bed
       if (!inMax) {
-        feedBand(b.footwork, 0.5 + b.lean * 0.3)
-        const lw = b.joints.lWrist
-        const rw = b.joints.rWrist
-        const shY = ((b.joints.lShoulder?.y ?? 0.4) + (b.joints.rShoulder?.y ?? 0.4)) / 2
-        const handsUp = [lw, rw].filter((w) => w && !w.held && w.vis > 0.4 && w.y < shY + b.sw * 0.4).length / 2
-        setPad(Math.max(b.guard, handsUp * 0.7), 0.5 + b.lean * 0.3, now - lastStrikeRef.current)
-        if (b.seize > 0.6) resolve()
+        // the beds are sound only: never let them take the body path down
+        try {
+          feedBand(b.footwork, 0.5 + b.lean * 0.3)
+          const lw = b.joints.lWrist
+          const rw = b.joints.rWrist
+          const shY = ((b.joints.lShoulder?.y ?? 0.4) + (b.joints.rShoulder?.y ?? 0.4)) / 2
+          const handsUp = [lw, rw].filter((w) => w && !w.held && w.vis > 0.4 && w.y < shY + b.sw * 0.4).length / 2
+          setPad(Math.max(b.guard, handsUp * 0.7), 0.5 + b.lean * 0.3, now - lastStrikeRef.current)
+          if (b.seize > 0.6) resolve()
+        } catch (err) {
+          console.warn('band/bed failed:', err)
+        }
       }
       // 蓄: a hand drawn back is the breath before the blow
       if (b.windup && !b.gated && now - lastStrikeRef.current > 700) {

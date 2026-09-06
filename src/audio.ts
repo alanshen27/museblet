@@ -1036,6 +1036,10 @@ export function untilNextPulse(from?: number): number {
   // eighth late; a touch of swing keeps it human
   return (wait > PULSE * 0.78 ? 0 : wait) + Math.random() * 0.012
 }
+/** the clock the grid is anchored to (audio time, seconds; 0 before audio exists) */
+export function audioNow(): number {
+  return ctx ? ctx.currentTime : 0
+}
 /** index of the eighth the time falls on (0 = downbeat of the bar) */
 export function pulseIndex(t: number): number {
   return Math.round((t - gridAnchor) / PULSE) % 4
