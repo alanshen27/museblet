@@ -111,9 +111,13 @@ interface GhostFrame {
 // the invisible joint field that lets the mist part around the body — opt-in
 const BODY_FIELD = new URLSearchParams(window.location.search).has('bodyfield')
 
-// marks dry, hold, then return to 留白
-const HOLD_MS = 24000
-const FADE_MS = 6000
+// marks dry, hold, then return to 留白 — at fight speed: a mark is a beat
+// of afterimage, not a record; the canvas is empty again within a breath
+const HOLD_MS = 2200
+const FADE_MS = 1000
+// the cinnabar seal of a strike holds a beat and is gone
+const SEAL_HOLD_MS = 1200
+const SEAL_FADE_MS = 800
 const MAX_STROKES = 36
 const WET_MS = 1800
 
@@ -682,13 +686,13 @@ export default function InkSurface({
     for (let i = seals.current.length - 1; i >= 0; i--) {
       const sl = seals.current[i]
       const age = now - sl.born
-      if (age > 7000) {
+      if (age > SEAL_HOLD_MS + SEAL_FADE_MS) {
         seals.current.splice(i, 1)
         continue
       }
       // pressed: lands large and settles in 140 ms, then holds, then fades
       const press = age < 140 ? 1.35 - 0.35 * (age / 140) : 1
-      const fade = age > 4500 ? 1 - (age - 4500) / 2500 : 1
+      const fade = age > SEAL_HOLD_MS ? 1 - (age - SEAL_HOLD_MS) / SEAL_FADE_MS : 1
       const size = sl.size * S * press
       const tall = sl.glyph.length > 1
       const sw = tall ? size * 0.62 : size
